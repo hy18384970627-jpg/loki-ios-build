@@ -1,0 +1,31 @@
+name: Loki iOS unsigned build
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: loki-ios-unsigned
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Extract reviewed iOS source
+        run: unzip -q loki-ios-source.zip -d ios-source
+      - name: Install XcodeGen
+        run: command -v xcodegen || brew install xcodegen
+      - name: Compile unsigned iPhone app
+        working-directory: ios-source
+        run: bash scripts/build-macos.sh device-unsigned
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: loki-ios-device-unsigned
+          path: ios-source/build/Loki-device-unsigned.zip
+          if-no-files-found: error
+          retention-days: 1
