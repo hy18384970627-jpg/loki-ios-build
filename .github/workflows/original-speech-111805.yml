@@ -45,6 +45,14 @@ jobs:
         shell: bash
         working-directory: app-source
         run: |
+          python3 - <<'NORMALIZE'
+          from pathlib import Path
+          from hashlib import sha256
+          p=Path('Sources/App/VoiceService.swift')
+          raw=p.read_bytes()
+          assert sha256(raw).hexdigest() in ('a26b778df5aad2f96776a9b4adab50f0056f5675713fbc5fa9bd916370c5f322','fdac883597a662f4fe305570ff6e0000dc28ae875a3d109434998be3ecde181f')
+          p.write_bytes(raw.replace(b'\r\n',b'\n'))
+          NORMALIZE
           shasum -a 256 -c <<'BEFORE'
           671927542549b805e60e218f1fe03b5e017625a33c3e0e6015fd9ea48d814d8f  Sources/App/API.swift
           d63749a32c08fb8b7e51c8bfa22a6229aed5f59932be9171c94ec80a8476abf0  Sources/App/AppState.swift
@@ -93,7 +101,7 @@ jobs:
                }
           --- a/Sources/App/VoiceService.swift
           +++ b/Sources/App/VoiceService.swift
-          @@ -158,6 +158,7 @@
+          @@ -158,47 +158,56 @@
                        guard let self else { return }
                        let started = ContinuousClock.now
                        var firstScheduleMS: Double?
@@ -101,8 +109,17 @@ jobs:
                        var completePCM = Data()
                        var playbackStage = "audio_session"
                        do {
-          @@ -171,34 +172,40 @@
-                               self.consumingLookahead = nil; self.prefetch(next, api: api); return
+          +                try Task.checkCancellation()
+                           if let messageID, let audio = OriginalVoiceCache.read(messageID, text: text) {
+          +                    self.prefetch(next, api: api)
+                               try await self.play(audio); self.playingMessageID = messageID
+                               let output = self.outputDiagnostics()
+                               Task { try? await api.event(kind: "delivery", body: output.merging([
+                                   "stage": "audio_cache_player_started"
+                               ]) { _, new in new }) }
+                               self.streamStatus = "Loki 正在说话"; self.streamTask = nil
+          -                    self.consumingLookahead = nil; self.prefetch(next, api: api); return
+          +                    self.consumingLookahead = nil; return
                            }
                            self.playing = true; self.streamStatus = "正在启动语音…"
           -                try await self.audioSession.playback()
@@ -121,6 +138,9 @@ jobs:
           -                playbackStage = "stream"
           +                let preparePlayback: @MainActor () async throws -> Void = {
           +                    try Task.checkCancellation()
+          +                    // The current request was submitted or prefetched. The gateway
+          +                    // reserves a separate ElevenLabs slot for waitForSlot requests.
+          +                    self.prefetch(next, api: api)
           +                    try await self.audioSession.playback()
           +                    try Task.checkCancellation()
           +                    guard self.streamID == id else { throw CancellationError() }
@@ -140,9 +160,6 @@ jobs:
           +                    if firstPacketMS == nil {
           +                        let parts = started.duration(to: .now).components
           +                        firstPacketMS = Double(parts.seconds) * 1000 + Double(parts.attoseconds) / 1e15
-          +                        // This request owns its slot. Queue the next even for short clips
-          +                        // that will finish arriving before the playback buffer starts.
-          +                        self.prefetch(next, api: api)
           +                    }
           +                    try await self.pcm.append(data); completePCM.append(data)
           +                }
@@ -166,7 +183,7 @@ jobs:
                            playbackStage = "player_drain"
                            try await self.pcm.drain()
                            guard self.streamID == id else { return }
-          @@ -207,6 +214,7 @@
+          @@ -207,6 +216,7 @@
                            let underruns = self.pcm.underrunCount
                            let output = self.outputDiagnostics()
                            Task { try? await api.event(kind: "delivery", body: output.merging(["stage": "audio_player_finished",
@@ -174,7 +191,7 @@ jobs:
                                "first_schedule_ms": firstScheduleMS ?? -1, "player_duration_ms": totalMS,
                                "underruns": underruns, "scope": "player_only_not_human_heard"]) { _, new in new }) }
                            self.pcm.stop(); self.playing = false; self.playingMessageID = nil; self.streamTask = nil
-          @@ -217,6 +225,8 @@
+          @@ -217,6 +227,8 @@
                            self.scheduleIdleRelease()
                        } catch {
                            guard self.streamID == id else { return }
@@ -317,7 +334,7 @@ jobs:
           shasum -a 256 -c <<'AFTER'
           7c64f17d9b8e36023344fe30f7ef02a88fc7c9054221420274f7206f07aa5dd7  Sources/App/API.swift
           4b074e1c2dc07fd93300216713f4af4e625b193e576503672cd6f6d153289a77  Sources/App/AppState.swift
-          0365846e43c67951b1763de2ba0305a35032994f89846dbdfd980d7e0cd7e89b  Sources/App/VoiceService.swift
+          80102703790a38e7528eaf6acc9233fe03cc69ca362c5a3ec99179bb5ae8687e  Sources/App/VoiceService.swift
           fbbb75be0fb156f30c9afc7970d59320e8def484d6eb3568f5a131e2823d518a  Sources/App/ChatView.swift
           1ebb89de3588c2383a3c454ac0f381e545f051d892f1be872d861d227c4053d4  Sources/App/ThinkingPanel.swift
           AFTER
