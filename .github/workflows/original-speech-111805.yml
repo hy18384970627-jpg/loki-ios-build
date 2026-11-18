@@ -1,0 +1,360 @@
+name: Build Loki original speech 111805
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/original-speech-111805.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: loki-original-speech-111805
+  cancel-in-progress: false
+jobs:
+  app:
+    runs-on: xcode-27
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-iphone-control
+          ref: 8be1a93226edf64a2be9678f429383bc891f3dce
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: d6b09385be43ff8b595f01c0729dad073f83fd82
+          path: verified-recipe
+          persist-credentials: false
+      - name: Reconstruct verified public build 111804
+        shell: bash
+        run: |
+          echo '320c23d2ca69e5ce66e464324212df0ac535d0e0672a0440f467f7efef26269f  verified-recipe/.github/workflows/public-progress-111804.yml' | shasum -a 256 -c -
+          ruby <<'RUBY'
+          require 'yaml'
+          all = YAML.load_file('verified-recipe/.github/workflows/public-progress-111804.yml').fetch('jobs').fetch('app').fetch('steps')
+          ['Reconstruct verified public build 111803','Apply five reviewed Swift changes'].each_with_index do |name, i|
+            found = all.select { |step| step['name'] == name }
+            abort("Invalid step: #{name}") unless found.length == 1
+            step = found.first
+            directory = i == 0 ? '.' : 'app-source'
+            abort('Invalid source location') unless step.fetch('working-directory','.') == directory
+            system('/bin/bash','-e','-o','pipefail','-c',step.fetch('run'), chdir: directory) or abort("Failed: #{name}")
+          end
+          RUBY
+      - name: Apply verified audio and progress interface changes
+        shell: bash
+        working-directory: app-source
+        run: |
+          shasum -a 256 -c <<'BEFORE'
+          671927542549b805e60e218f1fe03b5e017625a33c3e0e6015fd9ea48d814d8f  Sources/App/API.swift
+          d63749a32c08fb8b7e51c8bfa22a6229aed5f59932be9171c94ec80a8476abf0  Sources/App/AppState.swift
+          fdac883597a662f4fe305570ff6e0000dc28ae875a3d109434998be3ecde181f  Sources/App/VoiceService.swift
+          256b9eca16d11488daa41c2672da5750b04559492d6aa063e124e053a011077e  Sources/App/ChatView.swift
+          43467fe98ac087ede5223a3766890be2c4a0e95303f9bbb2f4a245065aae1790  Sources/App/ThinkingPanel.swift
+          BEFORE
+          cat > "$RUNNER_TEMP/111805.patch" <<'PHONE_PATCH'
+          --- a/Sources/App/API.swift
+          +++ b/Sources/App/API.swift
+          @@ -84,15 +84,23 @@
+                   return data
+               }
+               // Awaiting the consumer applies backpressure instead of retaining full audio.
+          -    func speech(_ text: String, waitForSlot: Bool = false, consume: @MainActor (Data) async throws -> Void) async throws {
+          +    func speech(_ text: String, waitForSlot: Bool = false,
+          +                preparePlayback: @MainActor () async throws -> Void = {},
+          +                consume: @MainActor (Data) async throws -> Void) async throws {
+                   let segments = PCMPlayback.sentences(text)
+                   guard !segments.isEmpty, segments.count <= 24, text.count <= 12000,
+                         segments.allSatisfy({ $0.count <= 2000 }) else { throw LokiError.message("本次语音过长，请分段播放。") }
+          +        var playbackPrepared = false
+                   for attempt in 0...1 {
+                       var total = 0
+                       do {
+                           let download = PCMDownload(); defer { download.cancel() }
+                           let stream = download.stream(for: try request("/v1/speech/stream", ["text": text, "segments": segments, "wait_for_slot": waitForSlot]))
+          +                // The HTTP task is already running while iOS activates the output route.
+          +                if !playbackPrepared {
+          +                    try await preparePlayback()
+          +                    playbackPrepared = true
+          +                }
+                           var chunk = Data(); chunk.reserveCapacity(64_000)
+                           for try await packet in stream {
+                               try Task.checkCancellation()
+          --- a/Sources/App/AppState.swift
+          +++ b/Sources/App/AppState.swift
+          @@ -473,7 +473,7 @@
+                           if !played {
+                               for removed in self.spokenQueue.remove(where: { $0.batch == packet.batch }) { removed.finished() }
+                           }
+          -                packet.voice.releaseAudioSessionIfIdle()
+          +                if self.spokenQueue.isEmpty { packet.voice.releaseAudioSessionIfIdle() }
+                       }
+                   }
+               }
+          --- a/Sources/App/VoiceService.swift
+          +++ b/Sources/App/VoiceService.swift
+          @@ -158,6 +158,7 @@
+                       guard let self else { return }
+                       let started = ContinuousClock.now
+                       var firstScheduleMS: Double?
+          +            var firstPacketMS: Double?
+                       var completePCM = Data()
+                       var playbackStage = "audio_session"
+                       do {
+          @@ -171,34 +172,40 @@
+                               self.consumingLookahead = nil; self.prefetch(next, api: api); return
+                           }
+                           self.playing = true; self.streamStatus = "正在启动语音…"
+          -                try await self.audioSession.playback()
+          -                try Task.checkCancellation()
+          -                playbackStage = "player_start"
+          -                self.pcm = PCMPlayback()
+          -                try self.pcm.start(); self.streamStatus = "等待首段原声…"
+          -                self.pcm.firstScheduled = { [weak self] in
+          -                    let parts = started.duration(to: .now).components
+          -                    firstScheduleMS = Double(parts.seconds) * 1000 + Double(parts.attoseconds) / 1e15
+          -                    self?.streamStatus = "Loki 正在说话"
+          -                    // Request one next sentence while these samples are playing.
+          -                    self?.prefetch(next, api: api)
+          -                }
+          -                self.pcm.rebuffering = { [weak self] in self?.streamStatus = "正在缓冲原声…" }
+          -                playbackStage = "stream"
+          +                let preparePlayback: @MainActor () async throws -> Void = {
+          +                    try Task.checkCancellation()
+          +                    try await self.audioSession.playback()
+          +                    try Task.checkCancellation()
+          +                    guard self.streamID == id else { throw CancellationError() }
+          +                    playbackStage = "player_start"
+          +                    self.pcm = PCMPlayback()
+          +                    try self.pcm.start(); self.streamStatus = "等待首段原声…"
+          +                    self.pcm.firstScheduled = { [weak self] in
+          +                        let parts = started.duration(to: .now).components
+          +                        firstScheduleMS = Double(parts.seconds) * 1000 + Double(parts.attoseconds) / 1e15
+          +                        self?.streamStatus = "Loki 正在说话"
+          +                    }
+          +                    self.pcm.rebuffering = { [weak self] in self?.streamStatus = "正在缓冲原声…" }
+          +                    playbackStage = "stream"
+          +                }
+          +                let append: @MainActor (Data) async throws -> Void = { data in
+          +                    guard self.streamID == id else { throw CancellationError() }
+          +                    if firstPacketMS == nil {
+          +                        let parts = started.duration(to: .now).components
+          +                        firstPacketMS = Double(parts.seconds) * 1000 + Double(parts.attoseconds) / 1e15
+          +                        // This request owns its slot. Queue the next even for short clips
+          +                        // that will finish arriving before the playback buffer starts.
+          +                        self.prefetch(next, api: api)
+          +                    }
+          +                    try await self.pcm.append(data); completePCM.append(data)
+          +                }
+                           if let prepared {
+          -                    try await prepared.consume { [weak self] data in
+          -                        guard let self, self.streamID == id else { throw CancellationError() }
+          -                        try await self.pcm.append(data); completePCM.append(data)
+          -                    }
+          +                    try await preparePlayback()
+          +                    try await prepared.consume(append)
+                           } else {
+          -                    try await api.speech(text) { [weak self] data in
+          -                        guard let self, self.streamID == id else { throw CancellationError() }
+          -                        try await self.pcm.append(data); completePCM.append(data)
+          -                    }
+          +                    try await api.speech(text, preparePlayback: preparePlayback, consume: append)
+                           }
+                           self.consumingLookahead = nil
+          -                // Also covers very short final audio that starts only at drain.
+          -                self.prefetch(next, api: api)
+                           playbackStage = "player_drain"
+                           try await self.pcm.drain()
+                           guard self.streamID == id else { return }
+          @@ -207,6 +214,7 @@
+                           let underruns = self.pcm.underrunCount
+                           let output = self.outputDiagnostics()
+                           Task { try? await api.event(kind: "delivery", body: output.merging(["stage": "audio_player_finished",
+          +                    "first_packet_ready_ms": firstPacketMS ?? -1, "used_lookahead": prepared != nil,
+                               "first_schedule_ms": firstScheduleMS ?? -1, "player_duration_ms": totalMS,
+                               "underruns": underruns, "scope": "player_only_not_human_heard"]) { _, new in new }) }
+                           self.pcm.stop(); self.playing = false; self.playingMessageID = nil; self.streamTask = nil
+          @@ -217,6 +225,8 @@
+                           self.scheduleIdleRelease()
+                       } catch {
+                           guard self.streamID == id else { return }
+          +                self.lookahead?.stream.cancel(); self.lookahead = nil
+          +                self.consumingLookahead?.cancel(); self.consumingLookahead = nil
+                           self.pcm.stop(); self.playing = false; self.playingMessageID = nil; self.streamTask = nil
+                           if !(error is CancellationError) {
+                               self.errorMessage = self.playbackError(error)
+          --- a/Sources/App/ChatView.swift
+          +++ b/Sources/App/ChatView.swift
+          @@ -78,7 +78,11 @@
+                                               TurnThinkingPanel(
+                                                   liveProgress: app.activeGeneratingRequestID == message.id ? app.thinkingProgress : nil,
+                                                   saved: TurnProgressContent(summary: message.thinkingSummary, activity: message.activityLog)
+          -                                    ).id("activity-" + message.id.uuidString)
+          +                                    ) {
+          +                                        if app.activeGeneratingRequestID == message.id, messages.last?.id == message.id {
+          +                                            proxy.scrollTo("activity-" + message.id.uuidString, anchor: .bottom)
+          +                                        }
+          +                                    }.id("activity-" + message.id.uuidString)
+                                           }
+                                       }
+                                       if (app.checkingCare || app.busy) && app.activeGeneratingRequestID == nil {
+          --- a/Sources/App/ThinkingPanel.swift
+          +++ b/Sources/App/ThinkingPanel.swift
+          @@ -18,45 +18,63 @@
+           struct TurnThinkingPanel: View {
+               let liveProgress: ThinkingProgress?
+               let saved: TurnProgressContent
+          -    @State private var manuallyExpanded: Bool?
+          +    let onFirstContent: () -> Void
+          +    @State private var reasoningExpanded: Bool?
+          +    @State private var actionsExpanded: Bool?
+           
+               @ViewBuilder
+               var body: some View {
+                   if let liveProgress {
+          -            LiveThinkingPanel(progress: liveProgress, manuallyExpanded: $manuallyExpanded)
+          +            LiveThinkingPanel(progress: liveProgress, reasoningExpanded: $reasoningExpanded,
+          +                              actionsExpanded: $actionsExpanded, onFirstContent: onFirstContent)
+                   } else if !saved.isEmpty {
+          -            ThinkingPanel(content: saved, isLive: false, manuallyExpanded: $manuallyExpanded)
+          +            ProgressSections(content: saved, isLive: false, reasoningExpanded: $reasoningExpanded,
+          +                             actionsExpanded: $actionsExpanded)
+                   }
+               }
+           }
+           
+           private struct LiveThinkingPanel: View {
+               @ObservedObject var progress: ThinkingProgress
+          -    @Binding var manuallyExpanded: Bool?
+          +    @Binding var reasoningExpanded: Bool?
+          +    @Binding var actionsExpanded: Bool?
+          +    let onFirstContent: () -> Void
+           
+               var body: some View {
+          -        if progress.content.isEmpty {
+          -            HStack(spacing: 8) {
+          -                ProgressView().controlSize(.small)
+          -                Text("Thinking…").font(.footnote)
+          +        ProgressSections(content: progress.content, isLive: true, reasoningExpanded: $reasoningExpanded,
+          +                         actionsExpanded: $actionsExpanded)
+          +            .onChange(of: progress.content.isEmpty) { wasEmpty, isEmpty in
+          +                if wasEmpty && !isEmpty { onFirstContent() }
+                       }
+          -            .foregroundStyle(LokiDesign.muted)
+          -            .padding(.vertical, 6)
+          -        } else {
+          -            ThinkingPanel(content: progress.content, isLive: true, manuallyExpanded: $manuallyExpanded)
+          +    }
+          +}
+          +
+          +private struct ProgressSections: View {
+          +    let content: TurnProgressContent
+          +    let isLive: Bool
+          +    @Binding var reasoningExpanded: Bool?
+          +    @Binding var actionsExpanded: Bool?
+          +
+          +    @ViewBuilder
+          +    var body: some View {
+          +        if let summary = content.summary {
+          +            ProgressDisclosure(heading: "Reasoning", text: summary, identifier: "turn-reasoning",
+          +                               openByDefault: isLive, manuallyExpanded: $reasoningExpanded)
+          +        }
+          +        if let actions = content.activity {
+          +            ProgressDisclosure(heading: "Actions", text: actions, identifier: "turn-actions",
+          +                               openByDefault: false, manuallyExpanded: $actionsExpanded)
+                   }
+               }
+           }
+           
+          -private struct ThinkingPanel: View {
+          -    let content: TurnProgressContent
+          -    let isLive: Bool
+          +private struct ProgressDisclosure: View {
+          +    let heading: String
+          +    let text: String
+          +    let identifier: String
+          +    let openByDefault: Bool
+               @Binding var manuallyExpanded: Bool?
+          -    private var expanded: Bool { manuallyExpanded ?? isLive }
+          -    private var heading: String {
+          -        if isLive { return "Thinking…" }
+          -        return content.summary == nil ? "Activity" : "Reasoning"
+          -    }
+          +    private var expanded: Bool { manuallyExpanded ?? openByDefault }
+           
+               var body: some View {
+                   VStack(alignment: .leading, spacing: 6) {
+          @@ -76,23 +94,10 @@
+                       .buttonStyle(.plain)
+                       .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+                       if expanded {
+          -                if let summary = content.summary {
+          -                    Text(verbatim: summary)
+          -                        .font(.subheadline)
+          -                        .fixedSize(horizontal: false, vertical: true)
+          -                        .accessibilityIdentifier("turn-reasoning")
+          -                }
+          -                if let activity = content.activity {
+          -                    Label("Actions", systemImage: "wrench.and.screwdriver")
+          -                        .font(.caption.weight(.semibold)).foregroundStyle(LokiDesign.muted)
+          -                    Text(verbatim: activity).font(.footnote)
+          -                        .fixedSize(horizontal: false, vertical: true)
+          -                        .accessibilityIdentifier("turn-actions")
+          -                }
+          -            } else if isLive, let summary = content.summary {
+          -                Text(verbatim: String(summary.suffix(160)))
+          -                    .font(.footnote).foregroundStyle(LokiDesign.muted)
+          -                    .lineLimit(2).truncationMode(.head)
+          +                Text(verbatim: text)
+          +                    .font(.subheadline)
+          +                    .fixedSize(horizontal: false, vertical: true)
+          +                    .accessibilityIdentifier(identifier)
+                       }
+                   }
+                   .padding(.horizontal, 11).padding(.vertical, 3)
+          PHONE_PATCH
+          patch -p1 < "$RUNNER_TEMP/111805.patch"
+          shasum -a 256 -c <<'AFTER'
+          7c64f17d9b8e36023344fe30f7ef02a88fc7c9054221420274f7206f07aa5dd7  Sources/App/API.swift
+          4b074e1c2dc07fd93300216713f4af4e625b193e576503672cd6f6d153289a77  Sources/App/AppState.swift
+          0365846e43c67951b1763de2ba0305a35032994f89846dbdfd980d7e0cd7e89b  Sources/App/VoiceService.swift
+          fbbb75be0fb156f30c9afc7970d59320e8def484d6eb3568f5a131e2823d518a  Sources/App/ChatView.swift
+          1ebb89de3588c2383a3c454ac0f381e545f051d892f1be872d861d227c4053d4  Sources/App/ThinkingPanel.swift
+          AFTER
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          p=Path('project.yml')
+          s=p.read_text()
+          assert '111804' in s and '111805' not in s
+          p.write_text(s.replace('111804','111805'))
+          PYTHON
+      - name: Verify calibrated pointer math
+        run: |
+          cat app-source/Sources/App/PhonePointerMath.swift app-source/review/tests/pointer-math-check.swift > /tmp/pointer-check.swift
+          swift /tmp/pointer-check.swift
+      - name: Generate project
+        working-directory: app-source
+        run: |
+          command -v xcodegen || brew install xcodegen
+          swift scripts/generate-app-icon.swift
+          xcodegen generate --spec project.yml
+          mkdir -p build
+      - name: Compile complete App for simulator
+        working-directory: app-source
+        run: |
+          xcodebuild -project Loki.xcodeproj -scheme Loki -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath build/Simulator CODE_SIGNING_ALLOWED=NO build > build/simulator.log 2>&1 || { tail -100 build/simulator.log; exit 1; }
+      - name: Compile real iPhone architecture
+        working-directory: app-source
+        run: |
+          xcodebuild -project Loki.xcodeproj -scheme Loki -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/Device CODE_SIGNING_ALLOWED=NO build > build/device.log 2>&1 || { tail -100 build/device.log; exit 1; }
+          python3 scripts/verify-device-build.py build/Device/Build/Products/Debug-iphoneos/Loki.app
+          ditto -c -k --sequesterRsrc --keepParent build/Device/Build/Products/Debug-iphoneos/Loki.app build/Loki-screen-control-unsigned.zip
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: loki-original-speech-111805
+          path: |
+            app-source/build/simulator.log
+            app-source/build/device.log
+            app-source/build/Loki-screen-control-unsigned.zip
+          retention-days: 1
