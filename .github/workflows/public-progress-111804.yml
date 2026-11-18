@@ -1,0 +1,90 @@
+name: Build Loki public progress 111804
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/public-progress-111804.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: loki-public-progress-111804
+  cancel-in-progress: false
+jobs:
+  app:
+    runs-on: xcode-27
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-iphone-control
+          ref: 8be1a93226edf64a2be9678f429383bc891f3dce
+          persist-credentials: false
+      - name: Reconstruct verified public build 111803
+        shell: bash
+        run: |
+          echo '0942e7dddd9931f289ca4c33b2dbe4a23fbd6618c139148c5adf1dc950572a26  .github/workflows/mood-activity.yml' | shasum -a 256 -c -
+          ruby <<'RUBY'
+          require 'yaml'
+          definitions = YAML.load_file('.github/workflows/mood-activity.yml').fetch('jobs').fetch('app').fetch('steps')
+          names = ['Verify and unpack reviewed source', 'Apply reviewed Live Activity extension', 'Apply expandable chat summary', 'Apply mood meters and live activity log']
+          names.each_with_index do |name, position|
+            entries = definitions.select { |entry| entry['name'] == name }
+            raise 'unexpected source preparation step' unless entries.size == 1
+            entry = entries.first
+            directory = position == 0 ? '.' : 'app-source'
+            raise 'unexpected source location' unless entry.fetch('working-directory','.') == directory
+            system('/bin/bash', '-e', '-o', 'pipefail', '-c', entry.fetch('run'), chdir: directory) or abort("Source preparation failed: #{name}")
+          end
+          RUBY
+      - name: Apply five reviewed Swift changes
+        working-directory: app-source
+        run: |
+          echo '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' | base64 -D > /tmp/phone-111804-diffs.zip
+          echo 'e82dce2b7df2661e6573f0a2e7bc142ca37aab919201a731e3cb68fe75af5644  /tmp/phone-111804-diffs.zip' | shasum -a 256 -c -
+          mkdir "$RUNNER_TEMP/phone-111804"
+          unzip -q /tmp/phone-111804-diffs.zip -d "$RUNNER_TEMP/phone-111804"
+          for diff in "$RUNNER_TEMP"/phone-111804/*.diff; do patch -p1 < "$diff"; done
+          shasum -a 256 -c <<'CHECK_FILES'
+          671927542549b805e60e218f1fe03b5e017625a33c3e0e6015fd9ea48d814d8f  Sources/App/API.swift
+          d63749a32c08fb8b7e51c8bfa22a6229aed5f59932be9171c94ec80a8476abf0  Sources/App/AppState.swift
+          256b9eca16d11488daa41c2672da5750b04559492d6aa063e124e053a011077e  Sources/App/ChatView.swift
+          3c76b37563c51ea0726824a9af53d1a16df0286fd17515a7a4f552bc5c51f3d0  Sources/App/Models.swift
+          43467fe98ac087ede5223a3766890be2c4a0e95303f9bbb2f4a245065aae1790  Sources/App/ThinkingPanel.swift
+          CHECK_FILES
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          project = Path('project.yml')
+          source = project.read_text()
+          assert '111803' in source and '111804' not in source
+          project.write_text(source.replace('111803', '111804'))
+          PYTHON
+      - name: Verify calibrated pointer math
+        run: |
+          cat app-source/Sources/App/PhonePointerMath.swift app-source/review/tests/pointer-math-check.swift > /tmp/pointer-check.swift
+          swift /tmp/pointer-check.swift
+      - name: Generate project
+        working-directory: app-source
+        run: |
+          command -v xcodegen || brew install xcodegen
+          swift scripts/generate-app-icon.swift
+          xcodegen generate --spec project.yml
+          mkdir -p build
+      - name: Compile complete App for simulator
+        working-directory: app-source
+        run: |
+          xcodebuild -project Loki.xcodeproj -scheme Loki -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath build/Simulator CODE_SIGNING_ALLOWED=NO build > build/simulator.log 2>&1 || { tail -100 build/simulator.log; exit 1; }
+      - name: Compile real iPhone architecture
+        working-directory: app-source
+        run: |
+          xcodebuild -project Loki.xcodeproj -scheme Loki -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/Device CODE_SIGNING_ALLOWED=NO build > build/device.log 2>&1 || { tail -100 build/device.log; exit 1; }
+          python3 scripts/verify-device-build.py build/Device/Build/Products/Debug-iphoneos/Loki.app
+          ditto -c -k --sequesterRsrc --keepParent build/Device/Build/Products/Debug-iphoneos/Loki.app build/Loki-screen-control-unsigned.zip
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: loki-public-progress-111804
+          path: |
+            app-source/build/simulator.log
+            app-source/build/device.log
+            app-source/build/Loki-screen-control-unsigned.zip
+          retention-days: 1
