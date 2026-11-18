@@ -59,6 +59,7 @@ jobs:
           fdac883597a662f4fe305570ff6e0000dc28ae875a3d109434998be3ecde181f  Sources/App/VoiceService.swift
           256b9eca16d11488daa41c2672da5750b04559492d6aa063e124e053a011077e  Sources/App/ChatView.swift
           43467fe98ac087ede5223a3766890be2c4a0e95303f9bbb2f4a245065aae1790  Sources/App/ThinkingPanel.swift
+          3c76b37563c51ea0726824a9af53d1a16df0286fd17515a7a4f552bc5c51f3d0  Sources/App/Models.swift
           BEFORE
           cat > "$RUNNER_TEMP/111805.patch" <<'PHONE_PATCH'
           --- a/Sources/App/API.swift
@@ -202,7 +203,22 @@ jobs:
                                self.errorMessage = self.playbackError(error)
           --- a/Sources/App/ChatView.swift
           +++ b/Sources/App/ChatView.swift
-          @@ -78,7 +78,11 @@
+          @@ -34,6 +34,14 @@
+               @EnvironmentObject private var call: CallSession
+               private var messages: [ChatItem] { Array((previewMessages ?? app.messages).suffix(visibleMessageCount)) }
+               private var paired: Bool { previewMessages != nil || app.paired }
+          +    private func scrollToLatest(in proxy: ScrollViewProxy) {
+          +        guard let last = messages.last else { return }
+          +        if app.activeGeneratingRequestID == last.id, !app.thinkingProgress.content.isEmpty {
+          +            proxy.scrollTo("activity-" + last.id.uuidString, anchor: .bottom)
+          +        } else {
+          +            proxy.scrollTo(last.id, anchor: .bottom)
+          +        }
+          +    }
+               var body: some View {
+                   NavigationStack {
+                       VStack(spacing: 0) {
+          @@ -78,7 +86,11 @@
                                                TurnThinkingPanel(
                                                    liveProgress: app.activeGeneratingRequestID == message.id ? app.thinkingProgress : nil,
                                                    saved: TurnProgressContent(summary: message.thinkingSummary, activity: message.activityLog)
@@ -215,9 +231,39 @@ jobs:
                                            }
                                        }
                                        if (app.checkingCare || app.busy) && app.activeGeneratingRequestID == nil {
+          @@ -111,23 +123,20 @@
+                               .defaultScrollAnchor(.bottom, for: .initialOffset)
+                               .simultaneousGesture(TapGesture().onEnded { composerFocused = false })
+                               .onAppear {
+          -                        if let last = messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
+          +                        scrollToLatest(in: proxy)
+                               }
+                               .onChange(of: scenePhase) { _, phase in
+          -                        if phase == .active, app.selectedTab == 0, let last = app.messages.last {
+          -                            proxy.scrollTo(last.id, anchor: .bottom)
+          -                        }
+          +                        if phase == .active, app.selectedTab == 0 { scrollToLatest(in: proxy) }
+                               }
+                               .onChange(of: app.activeGeneratingRequestID) { _, id in
+          -                        if let id, messages.last?.id == id { proxy.scrollTo("activity-" + id.uuidString, anchor: .bottom) }
+          +                        if let id, messages.last?.id == id { scrollToLatest(in: proxy) }
+                               }
+                               .onChange(of: app.selectedTab) { _, tab in
+          -                        if tab == 0, let last = app.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
+          +                        if tab == 0 { scrollToLatest(in: proxy) }
+                               }
+                               .onChange(of: app.messages.count) { _, _ in
+          -                        guard let last = app.messages.last else { return }
+          -                        if reduceMotion { proxy.scrollTo(last.id, anchor: .bottom) }
+          -                        else { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
+          +                        if reduceMotion { scrollToLatest(in: proxy) }
+          +                        else { withAnimation { scrollToLatest(in: proxy) } }
+                               }
+                           }
+                           if replayTip != nil {
           --- a/Sources/App/ThinkingPanel.swift
           +++ b/Sources/App/ThinkingPanel.swift
-          @@ -18,45 +18,63 @@
+          @@ -18,45 +18,68 @@
            struct TurnThinkingPanel: View {
                let liveProgress: ThinkingProgress?
                let saved: TurnProgressContent
@@ -247,26 +293,33 @@ jobs:
           +    @Binding var actionsExpanded: Bool?
           +    let onFirstContent: () -> Void
            
-               var body: some View {
+          -    var body: some View {
           -        if progress.content.isEmpty {
           -            HStack(spacing: 8) {
           -                ProgressView().controlSize(.small)
           -                Text("Thinking…").font(.footnote)
-          +        ProgressSections(content: progress.content, isLive: true, reasoningExpanded: $reasoningExpanded,
-          +                         actionsExpanded: $actionsExpanded)
-          +            .onChange(of: progress.content.isEmpty) { wasEmpty, isEmpty in
-          +                if wasEmpty && !isEmpty { onFirstContent() }
+          +    @ViewBuilder var body: some View {
+          +        if !progress.content.isEmpty {
+          +            VStack(alignment: .leading, spacing: 5) {
+          +                ProgressSections(content: progress.content, isLive: true, reasoningExpanded: $reasoningExpanded,
+          +                                 actionsExpanded: $actionsExpanded)
                        }
           -            .foregroundStyle(LokiDesign.muted)
           -            .padding(.vertical, 6)
           -        } else {
           -            ThinkingPanel(content: progress.content, isLive: true, manuallyExpanded: $manuallyExpanded)
-          +    }
-          +}
-          +
+          +            .onAppear(perform: onFirstContent)
+          +            .onChange(of: progress.content.summary != nil) { hadSummary, hasSummary in
+          +                if !hadSummary && hasSummary { onFirstContent() }
+          +            }
+                   }
+               }
+           }
+           
+          -private struct ThinkingPanel: View {
           +private struct ProgressSections: View {
-          +    let content: TurnProgressContent
-          +    let isLive: Bool
+               let content: TurnProgressContent
+               let isLive: Bool
           +    @Binding var reasoningExpanded: Bool?
           +    @Binding var actionsExpanded: Bool?
           +
@@ -279,13 +332,10 @@ jobs:
           +        if let actions = content.activity {
           +            ProgressDisclosure(heading: "Actions", text: actions, identifier: "turn-actions",
           +                               openByDefault: false, manuallyExpanded: $actionsExpanded)
-                   }
-               }
-           }
-           
-          -private struct ThinkingPanel: View {
-          -    let content: TurnProgressContent
-          -    let isLive: Bool
+          +        }
+          +    }
+          +}
+          +
           +private struct ProgressDisclosure: View {
           +    let heading: String
           +    let text: String
@@ -301,7 +351,7 @@ jobs:
            
                var body: some View {
                    VStack(alignment: .leading, spacing: 6) {
-          @@ -76,23 +94,10 @@
+          @@ -76,23 +99,10 @@
                        .buttonStyle(.plain)
                        .accessibilityValue(expanded ? "Expanded" : "Collapsed")
                        if expanded {
@@ -329,14 +379,32 @@ jobs:
                        }
                    }
                    .padding(.horizontal, 11).padding(.vertical, 3)
+          --- a/Sources/App/Models.swift
+          +++ b/Sources/App/Models.swift
+          @@ -7,7 +7,13 @@
+               init(summary: String? = nil, activity: String? = nil) {
+                   let trimmed = summary?.trimmingCharacters(in: .whitespacesAndNewlines)
+                   let legacyPrefix = "Activity · "
+          -        let legacyLog = trimmed.flatMap { $0.hasPrefix(legacyPrefix) ? String($0.dropFirst(legacyPrefix.count)) : nil }
+          +        let legacyLog = trimmed.flatMap { value -> String? in
+          +            guard value.hasPrefix(legacyPrefix) else { return nil }
+          +            let body = String(value.dropFirst(legacyPrefix.count))
+          +            let rows = body.components(separatedBy: .newlines)
+          +            let isStoredLog = body == activity || rows.contains(where: Self.legacyStages.contains)
+          +            return isStoredLog ? body : nil
+          +        }
+                   self.summary = legacyLog == nil && trimmed?.isEmpty == false ? trimmed : nil
+                   // 111803 saved generic delivery stages and actual tools in a single field.
+                   let rows = (activity ?? legacyLog ?? "").components(separatedBy: .newlines)
           PHONE_PATCH
           patch -p1 < "$RUNNER_TEMP/111805.patch"
           shasum -a 256 -c <<'AFTER'
           7c64f17d9b8e36023344fe30f7ef02a88fc7c9054221420274f7206f07aa5dd7  Sources/App/API.swift
           4b074e1c2dc07fd93300216713f4af4e625b193e576503672cd6f6d153289a77  Sources/App/AppState.swift
           80102703790a38e7528eaf6acc9233fe03cc69ca362c5a3ec99179bb5ae8687e  Sources/App/VoiceService.swift
-          fbbb75be0fb156f30c9afc7970d59320e8def484d6eb3568f5a131e2823d518a  Sources/App/ChatView.swift
-          1ebb89de3588c2383a3c454ac0f381e545f051d892f1be872d861d227c4053d4  Sources/App/ThinkingPanel.swift
+          01c0b836502824f1eded36431a6f335ee67a9ee5478baa43214e5e2fbf9712c8  Sources/App/ChatView.swift
+          4b705c66822d1fd73aa079c61833295ec763ec0df72c784d8d52e8db5b22c863  Sources/App/ThinkingPanel.swift
+          b73141282ae1703758e11f533f5d300328dcdd6251094e0cdc8c3f8972c2fd77  Sources/App/Models.swift
           AFTER
           python3 - <<'PYTHON'
           from pathlib import Path
@@ -345,6 +413,26 @@ jobs:
           assert '111804' in s and '111805' not in s
           p.write_text(s.replace('111804','111805'))
           PYTHON
+      - name: Test public reasoning and tool display
+        shell: bash
+        working-directory: app-source
+        run: |
+          awk '/^struct ChatItem:/ { exit } { print }' Sources/App/Models.swift > "$RUNNER_TEMP/display-tests.swift"
+          cat >> "$RUNNER_TEMP/display-tests.swift" <<'SWIFT'
+          let prefix = "Activity · Compare the two options."
+          let tool = "Used the music search tool."
+          let stages = "Activity · Received your message.\nWriting the reply."
+          precondition(TurnProgressContent(summary: prefix, activity: tool).summary == prefix)
+          precondition(TurnProgressContent(summary: prefix, activity: tool).activity == tool)
+          precondition(TurnProgressContent(summary: stages).isEmpty)
+          precondition(TurnProgressContent(summary: "Activity · " + tool, activity: tool).summary == nil)
+          precondition(TurnProgressContent(summary: "Activity · " + tool, activity: tool).activity == tool)
+          precondition(TurnProgressContent(summary: "Compare the options.").summary == "Compare the options.")
+          precondition(TurnProgressContent(activity: tool).summary == nil)
+          precondition(TurnProgressContent(activity: tool).activity == tool)
+          print("Public progress and tool display regressions passed")
+          SWIFT
+          swift "$RUNNER_TEMP/display-tests.swift"
       - name: Verify calibrated pointer math
         run: |
           cat app-source/Sources/App/PhonePointerMath.swift app-source/review/tests/pointer-math-check.swift > /tmp/pointer-check.swift
