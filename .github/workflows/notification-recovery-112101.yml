@@ -1,0 +1,599 @@
+name: Build Loki notification recovery 112101
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/notification-recovery-112101.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: loki-notification-recovery-112101
+  cancel-in-progress: false
+jobs:
+  app:
+    runs-on: xcode-27
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-iphone-control
+          ref: 8be1a93226edf64a2be9678f429383bc891f3dce
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: d6b09385be43ff8b595f01c0729dad073f83fd82
+          path: verified-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: bdf05059603c369e0f2cceb56890ed1fa2f7d437
+          path: prior-recipe
+          persist-credentials: false
+      - name: Reconstruct verified public build 111805
+        shell: bash
+        run: |
+          echo '584c2aaaa3a0b1e4e82bbd98ffd3c77e3c3abbf1a0658949fa51d4918b3ae269  prior-recipe/.github/workflows/original-speech-111805.yml' | shasum -a 256 -c -
+          ruby <<'RUBY'
+          require 'yaml'
+          steps = YAML.load_file('prior-recipe/.github/workflows/original-speech-111805.yml').fetch('jobs').fetch('app').fetch('steps')
+          ['Reconstruct verified public build 111804','Apply verified audio and progress interface changes'].each_with_index do |name, i|
+            matching = steps.select { |s| s['name'] == name }
+            abort('Missing prior step') unless matching.size == 1
+            step = matching.first
+            directory = i == 0 ? '.' : 'app-source'
+            abort('Unexpected path') unless step.fetch('working-directory','.') == directory
+            system('/bin/bash','-e','-o','pipefail','-c',step.fetch('run'), chdir: directory) or abort(name)
+          end
+          RUBY
+      - name: Apply reviewed notification recovery changes
+        working-directory: app-source
+        shell: bash
+        run: |
+          python3 - <<'SOURCE_BEFORE'
+          from hashlib import sha256
+          from pathlib import Path
+          before={'Sources/App/Notifications.swift': '7057532cd08c7331cd307d26ecb069dec0b6fd8b8375ee7c6286a6f3fc1fefaf', 'Sources/App/AppState.swift': '4b074e1c2dc07fd93300216713f4af4e625b193e576503672cd6f6d153289a77', 'Sources/App/LokiApp.swift': '13ac2ed645cf013439cecd1ebdc3a4d1104545d09627f89faf958ca4ed512015', 'Sources/App/ChatView.swift': '01c0b836502824f1eded36431a6f335ee67a9ee5478baa43214e5e2fbf9712c8', 'Sources/LiveActivity/LokiChatActivityWidget.swift': '8ef8811c5d7a6ab535b158eb042060435a5fceee39f13053ba5cbca265998659'}
+          for name, expected in before.items():
+              p=Path(name)
+              data=p.read_bytes().replace(b'\r\n', b'\n')
+              assert sha256(data).hexdigest()==expected,name
+              p.write_bytes(data)
+          new_paths=['Sources/App/ChatNotificationInbox.swift', 'Tests/NotificationRouting/main.swift']
+          for name in new_paths:
+              assert not Path(name).exists(),name
+              Path(name).parent.mkdir(parents=True,exist_ok=True)
+          SOURCE_BEFORE
+          cat > "$RUNNER_TEMP/notification.patch" <<'PUBLIC_DIFF'
+          --- /dev/null
+          +++ b/Sources/App/ChatNotificationInbox.swift
+          @@ -0,0 +1,60 @@
+          +import Foundation
+          +
+          +enum ProtectedChatFile {
+          +    // A missing file is normal on first install. A protected or unreadable
+          +    // existing file must never be mistaken for a new, empty conversation.
+          +    static func read<T: Decodable>(_ url: URL, ifMissing fallback: T) throws -> T {
+          +        do {
+          +            return try JSONDecoder().decode(T.self, from: Data(contentsOf: url))
+          +        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+          +            return fallback
+          +        }
+          +    }
+          +}
+          +
+          +// The notification delegate can run before SwiftUI installs its observers.
+          +// Persist routing identifiers only; message content belongs in protected chat storage.
+          +struct ChatNotificationInbox {
+          +    private let defaults: UserDefaults
+          +    init(defaults: UserDefaults = .standard) { self.defaults = defaults }
+          +
+          +    private let openKey = "pendingChatNotificationOpen"
+          +    private let careKey = "pendingCareNotificationLocators"
+          +    private let focusKey = "pendingChatNotificationFocus"
+          +    var pendingCare: [String] { defaults.stringArray(forKey: careKey) ?? [] }
+          +    var pendingReply: UUID? {
+          +        guard let value = defaults.string(forKey: focusKey), value.hasPrefix("reply/") else { return nil }
+          +        return UUID(uuidString: String(value.dropFirst(6)))
+          +    }
+          +
+          +    func tapped(careLocator: String? = nil, replyID: UUID? = nil) {
+          +        defaults.set(true, forKey: openKey)
+          +        if let locator = careLocator, !locator.isEmpty {
+          +            defaults.set("care/" + locator, forKey: focusKey)
+          +            if !pendingCare.contains(locator) {
+          +                defaults.set(pendingCare + [locator], forKey: careKey)
+          +            }
+          +        } else if let replyID {
+          +            defaults.set("reply/" + replyID.uuidString, forKey: focusKey)
+          +        } else {
+          +            defaults.removeObject(forKey: focusKey)
+          +        }
+          +    }
+          +
+          +    func shouldFocus(care locator: String) -> Bool { defaults.string(forKey: focusKey) == "care/" + locator }
+          +
+          +    func finish(reply id: UUID) {
+          +        if pendingReply == id { defaults.removeObject(forKey: focusKey) }
+          +    }
+          +
+          +    func takeOpen() -> Bool {
+          +        guard defaults.bool(forKey: openKey) else { return false }
+          +        defaults.removeObject(forKey: openKey)
+          +        return true
+          +    }
+          +
+          +    func remove(_ locator: String) {
+          +        defaults.set(pendingCare.filter { $0 != locator }, forKey: careKey)
+          +        if shouldFocus(care: locator) { defaults.removeObject(forKey: focusKey) }
+          +    }
+          +}
+          --- a/Sources/App/Notifications.swift
+          +++ b/Sources/App/Notifications.swift
+          @@ -90,7 +90,13 @@
+               }
+               func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                           withCompletionHandler completionHandler: @escaping () -> Void) {
+          -        NotificationCenter.default.post(name: .init("LokiOpenChat"), object: nil)
+          -        completionHandler()
+          +        let payload = response.notification.request.content.userInfo
+          +        let locator = payload["care_event_id"] as? String
+          +        let id = (payload["reply_id"] as? String).flatMap(UUID.init(uuidString:))
+          +        Task { @MainActor in
+          +            ChatNotificationInbox().tapped(careLocator: locator, replyID: id)
+          +            NotificationCenter.default.post(name: .init("LokiOpenChat"), object: nil)
+          +            completionHandler()
+          +        }
+               }
+           }
+          --- a/Sources/App/AppState.swift
+          +++ b/Sources/App/AppState.swift
+          @@ -3,7 +3,7 @@
+           import UIKit
+           
+           @MainActor final class AppState: ObservableObject {
+          -    @Published var messages: [ChatItem] = PrivateFiles.load("chat.json", fallback: [])
+          +    @Published var messages: [ChatItem] = []
+               @Published var tasks: [TaskCard] = PrivateFiles.load("tasks.json", fallback: [])
+               @Published var commands: [MobileCommand] = []
+               @Published var notice: String?
+          @@ -19,6 +19,7 @@
+               @Published var unlocked = false
+               @Published var status: GatewayStatus?
+               @Published var selectedTab = 0
+          +    @Published var tappedChatMessage: UUID?
+               var api: MobileAPI {
+                   MobileAPI(base: UserDefaults.standard.string(forKey: "gatewayURL") ?? "", token: SecureToken.read())
+               }
+          @@ -33,11 +34,12 @@
+                   let detail: String
+               }
+               private var ledger: [String: Receipt] = PrivateFiles.load("tool-receipts.json", fallback: [:])
+          -    private var receivedCare: [String] = PrivateFiles.load("companion-received.json", fallback: [])
+          -    private var wallpaperReceipts: [String] = PrivateFiles.load("wallpaper-receipts.json", fallback: [])
+          +    private var receivedCare: [String] = []
+          +    private var wallpaperReceipts: [String] = []
+               private var syncingWallpaper = false
+               private var lastCareConfiguration = ""
+          -    private var outbox: [String: OutgoingMessage] = PrivateFiles.load("outgoing.json", fallback: [:])
+          +    private var outbox: [String: OutgoingMessage] = [:]
+          +    private var chatStorageReady = false
+               private var deliveryQueue: [@MainActor () async -> Void] = []
+               private var deliveryTask: Task<Void, Never>?
+               private struct SpokenPacket {
+          @@ -49,6 +51,7 @@
+               private var spokenQueue = SentencePlaybackQueue<SpokenPacket>()
+               private var spokenTask: Task<Void, Never>?
+               private var pullingCompanion = false
+          +    private var resolvingTappedReply = false
+               @Published private(set) var activeGeneratingRequestID: UUID?
+               let thinkingProgress = ThinkingProgress()
+               @Published private(set) var mood: LokiMood? = PrivateFiles.load("loki-mood.json", fallback: nil)
+          @@ -134,15 +137,74 @@
+                   }
+               }
+               init() {
+          +        restoreProtectedChat()
+          +    }
+          +    @discardableResult func restoreProtectedChat() -> Bool {
+          +        guard UIApplication.shared.isProtectedDataAvailable else { return false }
+          +        guard !chatStorageReady else { return true }
+          +        do {
+          +            let saved = try ProtectedChatFile.read(PrivateFiles.url("chat.json"), ifMissing: [ChatItem]())
+          +            let drafts = try ProtectedChatFile.read(PrivateFiles.url("outgoing.json"), ifMissing: [String: OutgoingMessage]())
+          +            // Commit neither snapshot until both have been read successfully.
+          +            messages = saved
+          +            outbox = drafts
+          +        } catch { return false }
+          +        receivedCare = PrivateFiles.load("companion-received.json", fallback: [])
+          +        wallpaperReceipts = PrivateFiles.load("wallpaper-receipts.json", fallback: [])
+          +        chatStorageReady = true
+                   // Process suspension is not proof of a failed send. Reconcile original IDs.
+                   messages = OutgoingRecovery.restore(messages, drafts: Array(outbox.values))
+                   outbox = outbox.filter { key, _ in !messages.contains(where: { $0.id.uuidString == key && $0.delivery == .sent }) }
+                   try? saveOutbox()
+                   try? PrivateFiles.save(messages, "chat.json")
+          +        return true
+               }
+               private func saveOutbox() throws { try PrivateFiles.save(outbox, "outgoing.json") }
+          +    func resolveTappedReply() async {
+          +        let taps = ChatNotificationInbox()
+          +        guard unlocked, restoreProtectedChat(), let id = taps.pendingReply else { return }
+          +        if let bubble = messages.first(where: { $0.role == "assistant" && $0.replyingTo == id }) {
+          +            tappedChatMessage = bubble.id
+          +            taps.finish(reply: id)
+          +            return
+          +        }
+          +        // An in-flight request is owned by the normal delivery pipeline. A tap
+          +        // must never resubmit a message or replay its music or device actions.
+          +        if let draft = outbox[id.uuidString],
+          +           draft.serverAccepted == true || messages.first(where: { $0.id == id })?.delivery != .failed {
+          +            return
+          +        }
+          +        guard paired, !resolvingTappedReply else { return }
+          +        resolvingTappedReply = true
+          +        defer { resolvingTappedReply = false }
+          +        do {
+          +            let status = try await api.chatStatus(id: id)
+          +            guard !Task.isCancelled, unlocked, taps.pendingReply == id else { return }
+          +            if var draft = outbox[id.uuidString], ["running", "complete"].contains(status.state) {
+          +                // A confirmed request can resume through the normal receipt path.
+          +                draft.serverAccepted = true
+          +                outbox[id.uuidString] = draft
+          +                try saveOutbox()
+          +                return
+          +            }
+          +            if status.state == "complete", let reply = status.reply, reply.read_without_reply != true {
+          +                if !messages.contains(where: { $0.replyingTo == id }), outbox[id.uuidString] == nil {
+          +                    try await showReply(reply.speech_text ?? reply.text, voice: nil, autoVoice: false, replyingTo: id)
+          +                }
+          +                guard let bubble = messages.first(where: { $0.replyingTo == id }), taps.pendingReply == id else { return }
+          +                tappedChatMessage = bubble.id
+          +                taps.finish(reply: id)
+          +                try? await api.event(kind: "delivery", body: ["request_id": id.uuidString, "stage": "client_stored"])
+          +            } else if ["complete", "missing", "failed"].contains(status.state) {
+          +                tappedChatMessage = messages.first(where: { $0.id == id })?.id
+          +                taps.finish(reply: id)
+          +            }
+          +        } catch {
+          +            // The pending ID survives a network failure and will be retried on unlock.
+          +        }
+          +    }
+               func reconcileOutgoing(health: HealthService, voice: VoiceService, alarms: AlarmService, focus: FocusService) async {
+          -        guard paired, unlocked, !busy, !checkingCare, deliveryTask == nil, followupTask == nil,
+          +        guard paired, unlocked, restoreProtectedChat(), !busy, !checkingCare, deliveryTask == nil, followupTask == nil,
+                         UIApplication.shared.applicationState == .active else { return }
+                   for draft in outbox.values.sorted(by: { $0.createdAt < $1.createdAt }) {
+                       guard !Task.isCancelled, UIApplication.shared.applicationState == .active else { return }
+          @@ -202,6 +264,7 @@
+                   } else { queueDelivery(transmit) }
+               }
+               private func enqueue(_ draft: OutgoingMessage) -> Bool {
+          +        guard restoreProtectedChat() else { notice = "暂时无法读取已有聊天记录，请解锁手机后重试。"; return false }
+                   do {
+                       outbox[draft.id.uuidString] = draft
+                       try saveOutbox()
+          @@ -404,6 +467,7 @@
+               private func showReply(_ text: String, voice: VoiceService?, autoVoice: Bool, wallpaper: WallpaperChange? = nil,
+                                      control: AppControl? = nil, focus: FocusService? = nil, replyingTo: UUID? = nil,
+                                      interject: Bool = false, waitForSpeech: Bool = false, careEventID: String? = nil) async throws {
+          +        guard restoreProtectedChat() else { throw LokiError.message("暂时无法读取已有聊天记录。") }
+                   let dialogue = Self.englishDialogue(text, fallback: "I couldn't say that clearly. Ask me once more.")
+                   var items = SentenceReplies.split(dialogue).map {
+                       ChatItem(role: "assistant", text: SentenceReplies.visible($0), speechText: $0)
+          @@ -528,8 +592,23 @@
+                   }
+               }
+               func refreshCompanion(voice: VoiceService) async {
+          -        guard unlocked, paired, !callActive, !pullingCompanion else { return }
+          +        guard unlocked, paired, restoreProtectedChat(), !callActive, !pullingCompanion else { return }
+                   pullingCompanion = true; defer { pullingCompanion = false }
+          +        let taps = ChatNotificationInbox()
+          +        for locator in taps.pendingCare {
+          +            do {
+          +                let data = try await api.data("/v1/care/message", ["id": locator], timeout: 8)
+          +                if let item = try JSONDecoder().decode(CareEnvelope.self, from: data).item {
+          +                    try await storeCare(item, voice: voice, tapLocator: locator)
+          +                }
+          +                taps.remove(locator)
+          +            } catch {
+          +                // Keep the tap across relaunch or a temporary transport failure.
+          +                // Regular inbox delivery below can still recover this or another event.
+          +                if Task.isCancelled { return }
+          +                break
+          +            }
+          +        }
+                   do {
+                       let hrv = UserDefaults.standard.object(forKey: "hrvCompanionEnabled") as? Bool ?? true
+                       let weather = UserDefaults.standard.bool(forKey: "weatherCompanionEnabled")
+          @@ -537,11 +616,11 @@
+                       let offset = TimeZone.current.secondsFromGMT(for: Date())
+                       let configuration = "\(hrv && health):\(weather):\(offset)"
+                       if configuration != lastCareConfiguration {
+          -                _ = try await api.data("/v1/care/settings", ["hrv_enabled": hrv && health, "weather_enabled": weather,
+          -                    "utc_offset_seconds": offset], timeout: 10)
+          -                lastCareConfiguration = configuration
+          -            }
+          -            guard (hrv && health) || weather else { return }
+          +                if (try? await api.data("/v1/care/settings", ["hrv_enabled": hrv && health, "weather_enabled": weather,
+          +                    "utc_offset_seconds": offset], timeout: 10)) != nil {
+          +                    lastCareConfiguration = configuration
+          +                }
+          +            }
+                       struct Status: Decodable { let has_due_event: Bool; let push_active: Bool }
+                       let status = try JSONDecoder().decode(Status.self, from: await api.data("/v1/care/status", timeout: 8))
+                       carePushReady = status.push_active
+          @@ -549,22 +628,35 @@
+                       let zone = TimeZone.current
+                       let data = try await api.data("/v1/care/next", ["device_clock": ["time_zone": zone.identifier,
+                           "utc_offset_seconds": zone.secondsFromGMT(for: Date())]], timeout: 90)
+          -            struct CareItem: Decodable { let id: String; let text: String; let speech_text: String? }
+          -            struct Envelope: Decodable { let item: CareItem? }
+          -            guard let item = try JSONDecoder().decode(Envelope.self, from: data).item else { return }
+          -            if !receivedCare.contains(item.id) && !messages.contains(where: { $0.careEventID == item.id }) {
+          -                try await showReply(item.speech_text ?? item.text, voice: voice,
+          -                    autoVoice: UserDefaults.standard.object(forKey: "autoVoice") as? Bool ?? true,
+          -                    interject: true, waitForSpeech: false, careEventID: item.id)
+          -            }
+          -            if !receivedCare.contains(item.id) { receivedCare.append(item.id); try PrivateFiles.save(receivedCare, "companion-received.json") }
+          -            _ = try await api.data("/v1/care/received", ["id": item.id], timeout: 8)
+          -            careStatus = "已收到 Loki 的主动消息"
+          +            guard let item = try JSONDecoder().decode(CareEnvelope.self, from: data).item else { return }
+          +            try await storeCare(item, voice: voice)
+                   } catch {
+                       careStatus = "主动关心等待联网或接口就绪"
+                       let reason = String(error.localizedDescription.prefix(180))
+                       Task { try? await api.event(kind: "delivery", body: ["stage": "care_fetch_failed", "error": reason]) }
+                   }
+          +    }
+          +    private struct CareItem: Decodable { let id: String; let text: String; let speech_text: String? }
+          +    private struct CareEnvelope: Decodable { let item: CareItem? }
+          +
+          +    private func storeCare(_ item: CareItem, voice: VoiceService, tapLocator: String? = nil) async throws {
+          +        if !messages.contains(where: { $0.careEventID == item.id }) {
+          +            // showReply saves chat.json atomically before publishing the bubbles.
+          +            try await showReply(item.speech_text ?? item.text, voice: voice,
+          +                autoVoice: UserDefaults.standard.object(forKey: "autoVoice") as? Bool ?? true,
+          +                interject: true, waitForSpeech: false, careEventID: item.id)
+          +        }
+          +        guard let bubble = messages.first(where: { $0.careEventID == item.id }) else {
+          +            throw LokiError.message("主动消息尚未写入聊天记录。")
+          +        }
+          +        if let tapLocator, ChatNotificationInbox().shouldFocus(care: tapLocator) { tappedChatMessage = bubble.id }
+          +        if !receivedCare.contains(item.id) {
+          +            let updated = receivedCare + [item.id]
+          +            try PrivateFiles.save(updated, "companion-received.json")
+          +            receivedCare = updated
+          +        }
+          +        _ = try await api.data("/v1/care/received", ["id": item.id], timeout: 8)
+          +        careStatus = "已收到 Loki 的主动消息"
+               }
+               func refreshCommands() async {
+                   guard paired else { return }
+          --- a/Sources/App/LokiApp.swift
+          +++ b/Sources/App/LokiApp.swift
+          @@ -51,6 +51,7 @@
+                       .onChange(of: phase) { _, value in
+                           call.setForeground(value == .active)
+                           if value == .active {
+          +                    app.restoreProtectedChat()
+                               LocationService.shared.restoreAutomatic()
+                               focus.refresh(); alarms.refresh()
+                               Task {
+          @@ -66,6 +67,9 @@
+                               try? device.torch(false)
+                           }
+                       }
+          +            .onReceive(NotificationCenter.default.publisher(for: UIApplication.protectedDataDidBecomeAvailableNotification)) { _ in
+          +                app.restoreProtectedChat()
+          +            }
+                       .onChange(of: app.unlocked) { _, value in
+                           if value { Task { await alarms.autoSyncCourses(api: app.api); await app.syncWallpaperReceipt(); await app.refreshCompanion(voice: voice) } }
+                       }
+          @@ -73,12 +77,18 @@
+                       .onChange(of: voice.playing) { _, value in Task { await ChatLiveActivity.shared.speaking(value) } }
+                       .onOpenURL { url in
+                           if url.scheme == "loki", url.host == "chat" {
+          +                    ChatNotificationInbox().tapped(replyID: UUID(uuidString: url.lastPathComponent))
+                               app.selectedTab = 0
+          +                    if app.unlocked && phase == .active {
+          +                        _ = ChatNotificationInbox().takeOpen()
+          +                        Task { await app.resolveTappedReply() }
+          +                    }
+                               Task { await ChatLiveActivity.shared.end() }
+                           }
+                       }
+                       .task(id: app.unlocked && phase == .active) {
+                           guard app.unlocked && phase == .active else { return }
+          +                if ChatNotificationInbox().takeOpen() { app.selectedTab = 0 }
+                           while !Task.isCancelled {
+                               async let moodRefresh: Void = app.refreshMood()
+                               await app.refreshCompanion(voice: voice)
+          @@ -86,10 +96,15 @@
+                               do { try await Task.sleep(for: .seconds(5)) } catch { break }
+                           }
+                       }
+          -            .onReceive(NotificationCenter.default.publisher(for: .init("LokiOpenChat"))) { _ in app.selectedTab = 0; Task { await app.refreshCompanion(voice: voice) } }
+          +            .onReceive(NotificationCenter.default.publisher(for: .init("LokiOpenChat"))) { _ in
+          +                guard app.unlocked && phase == .active else { return }
+          +                if ChatNotificationInbox().takeOpen() { app.selectedTab = 0 }
+          +                Task { await app.resolveTappedReply(); await app.refreshCompanion(voice: voice) }
+          +            }
+                       .task(id: app.unlocked && phase == .active) {
+                           guard app.unlocked && phase == .active else { return }
+                           while !Task.isCancelled {
+          +                    await app.resolveTappedReply()
+                               await app.reconcileOutgoing(health: health, voice: voice, alarms: alarms, focus: focus)
+                               do { try await Task.sleep(for: .seconds(3)) } catch { break }
+                           }
+          --- a/Sources/App/ChatView.swift
+          +++ b/Sources/App/ChatView.swift
+          @@ -35,6 +35,7 @@
+               private var messages: [ChatItem] { Array((previewMessages ?? app.messages).suffix(visibleMessageCount)) }
+               private var paired: Bool { previewMessages != nil || app.paired }
+               private func scrollToLatest(in proxy: ScrollViewProxy) {
+          +        if previewMessages == nil, app.tappedChatMessage != nil { return }
+                   guard let last = messages.last else { return }
+                   if app.activeGeneratingRequestID == last.id, !app.thinkingProgress.content.isEmpty {
+                       proxy.scrollTo("activity-" + last.id.uuidString, anchor: .bottom)
+          @@ -124,6 +125,15 @@
+                               .simultaneousGesture(TapGesture().onEnded { composerFocused = false })
+                               .onAppear {
+                                   scrollToLatest(in: proxy)
+          +                    }
+          +                    .task(id: app.tappedChatMessage) {
+          +                        guard previewMessages == nil, let id = app.tappedChatMessage,
+          +                              let index = app.messages.firstIndex(where: { $0.id == id }) else { return }
+          +                        visibleMessageCount = max(visibleMessageCount, app.messages.count - index)
+          +                        await Task.yield()
+          +                        guard !Task.isCancelled, app.tappedChatMessage == id else { return }
+          +                        proxy.scrollTo(id, anchor: .center)
+          +                        app.tappedChatMessage = nil
+                               }
+                               .onChange(of: scenePhase) { _, phase in
+                                   if phase == .active, app.selectedTab == 0 { scrollToLatest(in: proxy) }
+          --- a/Sources/LiveActivity/LokiChatActivityWidget.swift
+          +++ b/Sources/LiveActivity/LokiChatActivityWidget.swift
+          @@ -21,7 +21,7 @@
+                       .padding(16)
+                       .activityBackgroundTint(Color(red: 0.025, green: 0.08, blue: 0.065))
+                       .activitySystemActionForegroundColor(gold)
+          -            .widgetURL(URL(string: "loki://chat"))
+          +            .widgetURL(URL(string: "loki://chat/" + context.attributes.requestID))
+                   } dynamicIsland: { context in
+                       DynamicIsland {
+                           DynamicIslandExpandedRegion(.leading) {
+          @@ -49,7 +49,7 @@
+                       } minimal: {
+                           Image(systemName: "sparkles").foregroundStyle(gold)
+                       }
+          -            .widgetURL(URL(string: "loki://chat"))
+          +            .widgetURL(URL(string: "loki://chat/" + context.attributes.requestID))
+                       .keylineTint(gold)
+                   }
+               }
+          --- /dev/null
+          +++ b/Tests/NotificationRouting/main.swift
+          @@ -0,0 +1,47 @@
+          +import Foundation
+          +
+          +// Compile alongside ChatNotificationInbox.swift. This exercises the same
+          +// persisted route the notification delegate and scene use across a cold start.
+          +let suite = "loki-tests-routing-" + UUID().uuidString
+          +let defaults = UserDefaults(suiteName: suite)!
+          +defer { defaults.removePersistentDomain(forName: suite) }
+          +let delegate = ChatNotificationInbox(defaults: defaults)
+          +let scene = ChatNotificationInbox(defaults: UserDefaults(suiteName: suite)!)
+          +let first = "unstructured-locator"
+          +let other = "unrelated-locator"
+          +let reply = UUID()
+          +
+          +delegate.tapped(careLocator: first)
+          +delegate.tapped(careLocator: first)
+          +precondition(scene.takeOpen() && !scene.takeOpen())
+          +precondition(scene.pendingCare == [first] && scene.shouldFocus(care: first))
+          +delegate.tapped(careLocator: other)
+          +scene.remove(first)
+          +precondition(scene.pendingCare == [other] && scene.shouldFocus(care: other))
+          +
+          +delegate.tapped(replyID: reply)
+          +precondition(!scene.shouldFocus(care: other))
+          +scene.remove(other)
+          +precondition(scene.pendingCare.isEmpty && scene.pendingReply == reply)
+          +scene.finish(reply: UUID())
+          +precondition(scene.pendingReply == reply)
+          +scene.finish(reply: reply)
+          +precondition(scene.pendingReply == nil)
+          +
+          +delegate.tapped(replyID: reply)
+          +delegate.tapped()
+          +precondition(scene.takeOpen() && scene.pendingReply == nil && scene.pendingCare.isEmpty)
+          +
+          +let testFile = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+          +defer { try? FileManager.default.removeItem(at: testFile) }
+          +let initiallyMissing = try ProtectedChatFile.read(testFile, ifMissing: [String]())
+          +precondition(initiallyMissing.isEmpty)
+          +try JSONEncoder().encode(["existing message"]).write(to: testFile)
+          +let persisted = try ProtectedChatFile.read(testFile, ifMissing: [String]())
+          +precondition(persisted == ["existing message"])
+          +try Data([0xff]).write(to: testFile)
+          +do {
+          +    _ = try ProtectedChatFile.read(testFile, ifMissing: [String]())
+          +    fatalError("An unreadable history cannot be treated as a new history")
+          +} catch is DecodingError {}
+          +print("Notification routing passed")
+          PUBLIC_DIFF
+          patch --batch -p1 < "$RUNNER_TEMP/notification.patch"
+          shasum -a 256 -c <<'SOURCE_AFTER'
+          e2596fb964449f89341c6c084b4f44495853efad596f309b7fcea6c614cba57b  Sources/App/ChatNotificationInbox.swift
+          c7e503c28862cbde45b2a7e36ff6f6a0bd0469825c5ae691a9b53dbea5c6edb1  Sources/App/Notifications.swift
+          89767e72f48d5737462e2b4c37628e0e437d85b68d487580e565f1be2eb5ca9a  Sources/App/AppState.swift
+          c53be786dd9628001ceb12e5b17751c145a8d5db713f0e250ae4e7f4eb621ca3  Sources/App/LokiApp.swift
+          bec932e5075e03f608dd063a79568f76fa4179145a417250aea656133eb03c4c  Sources/App/ChatView.swift
+          7459ba00938eceee113fca7fdb7f8e9d585dd8b809a0fcbef36347aeb4551eee  Sources/LiveActivity/LokiChatActivityWidget.swift
+          291a5cb0b748ecb1414138c2bd5bc4cb34a9aaf2a89b3ddaeda69fb598aa585d  Tests/NotificationRouting/main.swift
+          SOURCE_AFTER
+          python3 - <<'BUMP'
+          from pathlib import Path
+          p=Path('project.yml')
+          s=p.read_text()
+          assert '111805' in s and '112101' not in s
+          p.write_text(s.replace('111805','112101'))
+          BUMP
+      - name: Test notification routing and inbox
+        shell: bash
+        working-directory: app-source
+        run: |
+          swiftc Sources/App/ChatNotificationInbox.swift Tests/NotificationRouting/main.swift -o "$RUNNER_TEMP/loki-notification-routing"
+          "$RUNNER_TEMP/loki-notification-routing"
+      - name: Test public reasoning and tool display
+        shell: bash
+        working-directory: app-source
+        run: |
+          awk '/^struct ChatItem:/ { exit } { print }' Sources/App/Models.swift > "$RUNNER_TEMP/display-tests.swift"
+          cat >> "$RUNNER_TEMP/display-tests.swift" <<'SWIFT'
+          let prefix = "Activity · Compare the two options."
+          let tool = "Used the music search tool."
+          let stages = "Activity · Received your message.\nWriting the reply."
+          precondition(TurnProgressContent(summary: prefix, activity: tool).summary == prefix)
+          precondition(TurnProgressContent(summary: prefix, activity: tool).activity == tool)
+          precondition(TurnProgressContent(summary: stages).isEmpty)
+          precondition(TurnProgressContent(summary: "Activity · " + tool, activity: tool).summary == nil)
+          precondition(TurnProgressContent(summary: "Activity · " + tool, activity: tool).activity == tool)
+          precondition(TurnProgressContent(summary: "Compare the options.").summary == "Compare the options.")
+          precondition(TurnProgressContent(activity: tool).summary == nil)
+          precondition(TurnProgressContent(activity: tool).activity == tool)
+          print("Public progress and tool display regressions passed")
+          SWIFT
+          swift "$RUNNER_TEMP/display-tests.swift"
+      - name: Verify calibrated pointer math
+        run: |
+          cat app-source/Sources/App/PhonePointerMath.swift app-source/review/tests/pointer-math-check.swift > /tmp/pointer-check.swift
+          swift /tmp/pointer-check.swift
+      - name: Generate project
+        working-directory: app-source
+        run: |
+          command -v xcodegen || brew install xcodegen
+          swift scripts/generate-app-icon.swift
+          xcodegen generate --spec project.yml
+          mkdir -p build
+      - name: Compile complete App for simulator
+        working-directory: app-source
+        run: |
+          xcodebuild -project Loki.xcodeproj -scheme Loki -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath build/Simulator CODE_SIGNING_ALLOWED=NO build > build/simulator.log 2>&1 || { tail -100 build/simulator.log; exit 1; }
+      - name: Compile real iPhone architecture
+        working-directory: app-source
+        run: |
+          xcodebuild -project Loki.xcodeproj -scheme Loki -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/Device CODE_SIGNING_ALLOWED=NO build > build/device.log 2>&1 || { tail -100 build/device.log; exit 1; }
+          python3 scripts/verify-device-build.py build/Device/Build/Products/Debug-iphoneos/Loki.app
+          ditto -c -k --sequesterRsrc --keepParent build/Device/Build/Products/Debug-iphoneos/Loki.app build/Loki-screen-control-unsigned.zip
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: loki-notification-recovery-112101
+          path: |
+            app-source/build/simulator.log
+            app-source/build/device.log
+            app-source/build/Loki-screen-control-unsigned.zip
+          retention-days: 1
