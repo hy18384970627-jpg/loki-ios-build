@@ -1,0 +1,717 @@
+name: Build Loki mood and desk 112104
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/mood-desk-112104.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: loki-mood-desk-112104
+  cancel-in-progress: false
+jobs:
+  app:
+    runs-on: xcode-27
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-iphone-control
+          ref: 8be1a93226edf64a2be9678f429383bc891f3dce
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: d6b09385be43ff8b595f01c0729dad073f83fd82
+          path: verified-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: bdf05059603c369e0f2cceb56890ed1fa2f7d437
+          path: prior-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 3d5400d4edd282c8353fe9ca5f811e64fa35d2a5
+          path: notify-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 555062cda24502d988752cfb072df51bdf0498f4
+          path: time-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 3640476e16425c88d43f258027432c102838cb4a
+          path: mood-desk-base-recipe
+          persist-credentials: false
+      - name: Reconstruct verified public build 112103
+        shell: bash
+        run: |
+          echo '402a229cdc7b3cc490ee336cd64bda4110f5fa3a6a5e3e51aa1691bd2e669d3a  mood-desk-base-recipe/.github/workflows/time-labels-112103.yml' | shasum -a 256 -c -
+          ruby <<'RUBY'
+          require 'yaml'
+          steps = YAML.load_file('mood-desk-base-recipe/.github/workflows/time-labels-112103.yml').fetch('jobs').fetch('app').fetch('steps')
+          ['Reconstruct verified public build 112102','Apply reviewed time labels changes'].each_with_index do |name, i|
+            matching = steps.select { |s| s['name'] == name }
+            abort('Missing prior step') unless matching.size == 1
+            step = matching.first
+            directory = i == 0 ? '.' : 'app-source'
+            abort('Unexpected path') unless step.fetch('working-directory','.') == directory
+            system('/bin/bash','-e','-o','pipefail','-c',step.fetch('run'), chdir: directory) or abort(name)
+          end
+          RUBY
+      - name: Apply reviewed mood and desk changes
+        working-directory: app-source
+        shell: bash
+        run: |
+          python3 - <<'SOURCE_BEFORE'
+          from hashlib import sha256
+          from pathlib import Path
+          before={'Sources/App/AppState.swift': '4149ed308798c7216df59ac232da5df366fd28121111c7c183e97130bb646649', 'Sources/App/ChatView.swift': 'e3a1cc9221d1870dc990bf59d88de1cee27fe7886682941c965435981bd37c3a', 'Sources/App/DeskSync.swift': '712b4bd553a9a246acec1e938c3deb18002f022d8335eb5c8b5df6e59a6bdfc0', 'Sources/App/DeskView.swift': 'fab6e89b13c008ec7c5f58a33c72cafe44407be51eab267944c9c635d235630d', 'Sources/App/LokiApp.swift': '5359a00429b89bb451d8cf19c71b7959abb3c100512144d9f43a1397ed25a63c', 'Sources/App/MoodStrip.swift': '2d4869d02c04a84a70d640c4fd79fe3ed3f6a03087814960b5414de311f55109', 'Sources/App/Notifications.swift': '05af2cc1a3578bb5ef53064c78938922944ba4228da5fbc4bfd96389e1caeae2', 'Sources/App/VoiceService.swift': '80102703790a38e7528eaf6acc9233fe03cc69ca362c5a3ec99179bb5ae8687e'}
+          for name, expected in before.items():
+              p=Path(name)
+              data=p.read_bytes().replace(b'\r\n', b'\n')
+              assert sha256(data).hexdigest()==expected,name
+              p.write_bytes(data)
+          new_paths=['Sources/App/CompanionInteraction.swift', 'Tests/CompanionInteractionRegression/main.swift']
+          for name in new_paths:
+              assert not Path(name).exists(),name
+              Path(name).parent.mkdir(parents=True,exist_ok=True)
+          SOURCE_BEFORE
+          cat > "$RUNNER_TEMP/notification.patch" <<'PUBLIC_DIFF'
+          --- a/Sources/App/AppState.swift
+          +++ b/Sources/App/AppState.swift
+          @@ -712,7 +712,8 @@
+                   }
+               }
+               func refreshCompanion(voice: VoiceService) async {
+          -        guard unlocked, paired, restoreProtectedChat(), !callActive, !pullingCompanion else { return }
+          +        guard unlocked, paired, restoreProtectedChat(), !callActive, !pullingCompanion,
+          +              !CompanionInteraction.shared.composing else { return }
+                   pullingCompanion = true; defer { pullingCompanion = false }
+                   let taps = ChatNotificationInbox()
+                   for locator in taps.pendingCare {
+          @@ -723,6 +724,7 @@
+                              item.mayRestoreOffline { data = cached }
+                           else { data = try await api.data("/v1/care/message", ["id": locator], timeout: 8) }
+                           if let item = try JSONDecoder().decode(CareEnvelope.self, from: data).item {
+          +                    guard !CompanionInteraction.shared.composing else { return }
+                               try await storeCare(item, voice: voice, tapLocator: locator)
+                           }
+                           try BackgroundChatInbox.clearCare(locator: locator)
+          @@ -735,25 +737,32 @@
+                       }
+                   }
+                   do {
+          -            let hrv = UserDefaults.standard.object(forKey: "hrvCompanionEnabled") as? Bool ?? true
+          -            let weather = UserDefaults.standard.bool(forKey: "weatherCompanionEnabled")
+          -            let health = UserDefaults.standard.bool(forKey: "healthAutoSync")
+          +            struct Status: Decodable {
+          +                let has_due_event: Bool, push_active: Bool, hrv_enabled: Bool, weather_enabled: Bool
+          +            }
+          +            let status = try JSONDecoder().decode(Status.self, from: await api.data("/v1/care/status", timeout: 8))
+          +            carePushReady = status.push_active
+          +            let preferences = UserDefaults.standard
+          +            // A new phone can have no local preference yet. Preserve the paired
+          +            // care settings until this installation has an explicit choice.
+          +            let sharing = preferences.object(forKey: "healthAutoSync") as? Bool
+          +            let hrvChoice = preferences.object(forKey: "hrvCompanionEnabled") as? Bool
+          +            let hrv = hrvChoice == false ? false : (sharing ?? status.hrv_enabled)
+          +            let weather = preferences.object(forKey: "weatherCompanionEnabled") as? Bool ?? status.weather_enabled
+                       let offset = TimeZone.current.secondsFromGMT(for: Date())
+          -            let configuration = "\(hrv && health):\(weather):\(offset)"
+          +            let configuration = "\(hrv):\(weather):\(offset)"
+                       if configuration != lastCareConfiguration {
+          -                if (try? await api.data("/v1/care/settings", ["hrv_enabled": hrv && health, "weather_enabled": weather,
+          +                if (try? await api.data("/v1/care/settings", ["hrv_enabled": hrv, "weather_enabled": weather,
+                               "utc_offset_seconds": offset], timeout: 10)) != nil {
+                               lastCareConfiguration = configuration
+                           }
+                       }
+          -            struct Status: Decodable { let has_due_event: Bool; let push_active: Bool }
+          -            let status = try JSONDecoder().decode(Status.self, from: await api.data("/v1/care/status", timeout: 8))
+          -            carePushReady = status.push_active
+                       guard status.has_due_event else { return }
+                       let zone = TimeZone.current
+                       let data = try await api.data("/v1/care/next", ["device_clock": ["time_zone": zone.identifier,
+                           "utc_offset_seconds": zone.secondsFromGMT(for: Date())]], timeout: 90)
+          -            guard let item = try JSONDecoder().decode(CareEnvelope.self, from: data).item else { return }
+          +            guard !CompanionInteraction.shared.composing,
+          +                  let item = try JSONDecoder().decode(CareEnvelope.self, from: data).item else { return }
+                       try await storeCare(item, voice: voice)
+                   } catch {
+                       careStatus = "主动关心等待联网或接口就绪"
+          @@ -784,9 +793,12 @@
+                   let observation = locator.flatMap { ChatNotificationInbox().observedDelivery(careLocator: $0) }
+                   let stamp = Self.timestamp(observation, server: .server(item.message_at, source: item.message_time_source))
+                   if !messages.contains(where: { $0.careEventID == item.id }) {
+          +            let reminder = item.id.hasPrefix("silence_followup:") || item.id.hasPrefix("app_attention:")
+          +            let explicitlyOpened = tapLocator.map { ChatNotificationInbox().shouldFocus(care: $0) } ?? false
+          +            let autoVoice = UserDefaults.standard.object(forKey: "autoVoice") as? Bool ?? true
+                       // showReply saves chat.json atomically before publishing the bubbles.
+                       try await showReply(item.speech_text ?? item.text, voice: voice,
+          -                autoVoice: UserDefaults.standard.object(forKey: "autoVoice") as? Bool ?? true,
+          +                autoVoice: autoVoice && (!reminder || explicitlyOpened),
+                           interject: true, waitForSpeech: false, careEventID: item.id, careNoticeID: locator, timestamp: stamp)
+                   } else if let locator, let observation {
+                       try updateTimes(observations: [ChatNotificationInbox.key(careLocator: locator): observation], care: [:], replies: [:])
+          --- a/Sources/App/ChatView.swift
+          +++ b/Sources/App/ChatView.swift
+          @@ -202,6 +202,11 @@
+                                           .allowsHitTesting(app.paired && !submitting && !app.callActive && (hold.active || voice.draftRecording == nil))
+                                   } else {
+                                       TextField("发条消息", text: draft, axis: .vertical).lineLimit(1...5)
+          +                                .onChange(of: draft.wrappedValue) { _, value in
+          +                                    guard previewMessages == nil, composerFocused else { return }
+          +                                    if value.isEmpty { CompanionInteraction.shared.endEditing() }
+          +                                    else { CompanionInteraction.shared.edited() }
+          +                                }
+                                       .font(ChatTypography.owner)
+                                       .padding(.horizontal, 12).padding(.vertical, 11)
+                                       .lokiPanel(fill: LokiDesign.raised, radius: 18)
+          @@ -264,7 +269,10 @@
+                           replayTip = nil
+                       }
+                       .onChange(of: voice.errorMessage) { _, value in if let value { app.notice = value; voice.errorMessage = nil } }
+          -            .onChange(of: composerFocused) { _, value in app.composing = value }
+          +            .onChange(of: composerFocused) { _, value in
+          +                app.composing = value
+          +                if !value && previewMessages == nil { CompanionInteraction.shared.endEditing() }
+          +            }
+                       .toolbar {
+                           ToolbarItem(placement: .topBarLeading) {
+                               Menu {
+          --- /dev/null
+          +++ b/Sources/App/CompanionInteraction.swift
+          @@ -0,0 +1,72 @@
+          +import Foundation
+          +
+          +@MainActor final class CompanionInteraction {
+          +    static let shared = CompanionInteraction()
+          +
+          +    private let session = UUID()
+          +    private var foreground = false
+          +    private var recording = false
+          +    private var editingUntil: ContinuousClock.Instant?
+          +    private var idleTask: Task<Void, Never>?
+          +
+          +    var composing: Bool {
+          +        foreground && (recording || editingUntil != nil)
+          +    }
+          +
+          +    func heartbeat() {
+          +        foreground = true
+          +        report()
+          +    }
+          +
+          +    func leaveApp() {
+          +        guard foreground else { return }
+          +        foreground = false
+          +        recording = false
+          +        resetEditing()
+          +        report()
+          +    }
+          +
+          +    func edited() {
+          +        guard foreground else { return }
+          +        let wasComposing = composing
+          +        editingUntil = ContinuousClock.now.advanced(by: .seconds(7))
+          +        if !wasComposing { report() }
+          +        guard idleTask == nil else { return }
+          +        idleTask = Task { [weak self] in
+          +            guard let self else { return }
+          +            while let deadline = editingUntil {
+          +                do { try await ContinuousClock().sleep(until: deadline) } catch { return }
+          +                if deadline == editingUntil {
+          +                    endEditing()
+          +                    return
+          +                }
+          +            }
+          +        }
+          +    }
+          +
+          +    func endEditing() {
+          +        guard editingUntil != nil else { return }
+          +        resetEditing()
+          +        if foreground && !recording { report() }
+          +    }
+          +
+          +    func setRecording(_ value: Bool) {
+          +        let wasComposing = composing
+          +        recording = value
+          +        if wasComposing != composing { report() }
+          +    }
+          +
+          +    private func resetEditing() {
+          +        editingUntil = nil
+          +        idleTask?.cancel()
+          +        idleTask = nil
+          +    }
+          +
+          +    private func report() {
+          +        let api = MobileAPI(base: UserDefaults.standard.string(forKey: "gatewayURL") ?? "", token: SecureToken.read())
+          +        guard !api.base.isEmpty, !api.token.isEmpty else { return }
+          +        let payload: [String: Any] = ["foreground": foreground, "typing": composing,
+          +            "observed_at": Date().timeIntervalSince1970, "session_id": session.uuidString]
+          +        Task { _ = try? await api.data("/v1/care/interaction", payload, timeout: 4) }
+          +    }
+          +}
+          --- a/Sources/App/DeskSync.swift
+          +++ b/Sources/App/DeskSync.swift
+          @@ -24,6 +24,23 @@
+                   PrivateFiles.load("desk-cache.json", fallback: nil)
+               }
+           
+          +    func recording(_ key: String, api: MobileAPI) async throws -> Data {
+          +        guard key.utf8.count == 64, key.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
+          +            throw LokiError.message("这段书桌录音的索引无效。")
+          +        }
+          +        let url = try PrivateFiles.url("desk-reading-" + key + ".mp3")
+          +        if let data = try? Data(contentsOf: url), validAudio(data) { return data }
+          +        let audio = try await api.data("/v1/desk/audio/" + key, timeout: 60)
+          +        guard validAudio(audio) else { throw LokiError.message("书桌录音不完整，请再试一次。") }
+          +        try? audio.write(to: url, options: [.atomic, .completeFileProtection])
+          +        return audio
+          +    }
+          +
+          +    private func validAudio(_ data: Data) -> Bool {
+          +        guard data.count >= 256 else { return false }
+          +        return data.starts(with: [0x49, 0x44, 0x33]) || (data[0] == 0xff && (data[1] & 0xe0) == 0xe0)
+          +    }
+          +
+               private func fetch(api: MobileAPI) async throws {
+                   let data = try await api.data("/v1/desk", timeout: 8)
+                   try Task.checkCancellation()
+          --- a/Sources/App/DeskView.swift
+          +++ b/Sources/App/DeskView.swift
+          @@ -35,6 +35,17 @@
+               let kind: String
+               let body: String
+               let source_ids: [String]
+          +    let chapters: [DeskChapter]?
+          +}
+          +struct DeskRecording: Codable {
+          +    let parts: [String]
+          +    let ready: Bool
+          +}
+          +struct DeskChapter: Codable {
+          +    let number: Int?
+          +    let heading: String?
+          +    let body: String
+          +    let narration: DeskRecording?
+           }
+           struct DeskSession: Codable {
+               let action: String
+          @@ -42,6 +53,7 @@
+               let started: Double
+               let finished: Double
+               let next_at: Double
+          +    let narration: DeskRecording?
+           }
+           
+           struct DeskView: View {
+          @@ -64,7 +76,7 @@
+                                  let project = envelope.data.projects.first(where: { $0.id == latest.project_id }) {
+                                   Section("最近写下的") {
+                                       NavigationLink {
+          -                                DeskProjectView(project: project, revisions: envelope.data.revisions.filter { $0.project_id == project.id })
+          +                                DeskProjectView(project: project, envelope: self.$envelope)
+                                       } label: {
+                                           VStack(alignment: .leading, spacing: 8) {
+                                               Text(project.title).font(.headline)
+          @@ -117,7 +129,7 @@
+           
+               private func shelfLink(_ shelf: DeskShelf, count: Int, icon: String, desk: DeskData) -> some View {
+                   NavigationLink {
+          -            DeskShelfPage(shelf: shelf, desk: desk)
+          +            DeskShelfPage(shelf: shelf, envelope: $envelope)
+                   } label: {
+                       HStack {
+                           Label(shelf.title, systemImage: icon)
+          @@ -162,11 +174,13 @@
+           
+           private struct DeskShelfPage: View {
+               let shelf: DeskShelf
+          -    let desk: DeskData
+          +    @Binding var envelope: DeskEnvelope?
+           
+               var body: some View {
+                   ScrollView {
+          -            shelfContent(desk).padding(LokiDesign.pageInset).padding(.bottom, 16)
+          +            if let desk = envelope?.data {
+          +                shelfContent(desk).padding(LokiDesign.pageInset).padding(.bottom, 16)
+          +            }
+                   }
+                   .background { LokiBackdrop() }.foregroundStyle(LokiDesign.ink)
+                   .navigationTitle(shelf.title).navigationBarTitleDisplayMode(.inline)
+          @@ -187,7 +201,7 @@
+                           ForEach(desk.projects) { project in
+                               let revisions = desk.revisions.filter { $0.project_id == project.id }
+                               NavigationLink {
+          -                        DeskProjectView(project: project, revisions: revisions)
+          +                        DeskProjectView(project: project, envelope: $envelope)
+                               } label: {
+                                   VStack(alignment: .leading, spacing: 8) {
+                                       HStack {
+          @@ -218,11 +232,12 @@
+                           }
+                       case .journal:
+                           if desk.sessions.isEmpty { empty("暂时没有创作记录。") }
+          -                ForEach(Array(desk.sessions.prefix(20).enumerated()), id: \.offset) { entry in
+          +                ForEach(desk.sessions, id: \.started) { entry in
+                               VStack(alignment: .leading, spacing: 8) {
+          -                        Text(Date(timeIntervalSince1970: entry.element.finished), format: .dateTime.month().day().hour().minute())
+          +                        Text(Date(timeIntervalSince1970: entry.finished), format: .dateTime.month().day().hour().minute())
+                                       .font(.caption).foregroundStyle(LokiDesign.gold)
+          -                        Text(entry.element.note).font(.subheadline).textSelection(.enabled)
+          +                        Text(entry.note).font(.subheadline).textSelection(.enabled)
+          +                        DeskPlayButton(recording: entry.narration)
+                               }.deskPaper()
+                           }
+                       }
+          @@ -236,7 +251,8 @@
+           
+           private struct DeskProjectView: View {
+               let project: DeskProject
+          -    let revisions: [DeskRevision]
+          +    @Binding var envelope: DeskEnvelope?
+          +    private var revisions: [DeskRevision] { envelope?.data.revisions.filter { $0.project_id == project.id } ?? [] }
+               var body: some View {
+                   ScrollView {
+                       LazyVStack(alignment: .leading, spacing: 16) {
+          @@ -250,7 +266,25 @@
+                                       .font(.caption.weight(.semibold)).foregroundStyle(LokiDesign.gold)
+                                   Text(Date(timeIntervalSince1970: revision.created), format: .dateTime.year().month().day().hour().minute())
+                                       .font(.caption).foregroundStyle(LokiDesign.muted)
+          -                        Text(.init(revision.body)).lineSpacing(5).textSelection(.enabled)
+          +                        if let chapters = revision.chapters, !chapters.isEmpty {
+          +                            ForEach(Array(chapters.enumerated()), id: \.offset) { entry in
+          +                                let chapter = entry.element
+          +                                if let number = chapter.number, revisions.count > 1 || chapters.count > 1 {
+          +                                    DisclosureGroup {
+          +                                        Text(.init(chapter.body)).lineSpacing(5).textSelection(.enabled)
+          +                                            .frame(maxWidth: .infinity, alignment: .leading)
+          +                                    } label: {
+          +                                        Text(chapter.heading.map { "第 \(number) 章 · " + $0 } ?? "第 \(number) 章")
+          +                                            .font(.headline).foregroundStyle(LokiDesign.gold)
+          +                                    }
+          +                                } else {
+          +                                    Text(.init(chapter.body)).lineSpacing(5).textSelection(.enabled)
+          +                                }
+          +                                DeskPlayButton(recording: chapter.narration)
+          +                            }
+          +                        } else {
+          +                            Text(.init(revision.body)).lineSpacing(5).textSelection(.enabled)
+          +                        }
+                                   if !revision.source_ids.isEmpty {
+                                       Text("引用编号：" + revision.source_ids.joined(separator: "、"))
+                                           .font(.caption2).foregroundStyle(LokiDesign.muted)
+          @@ -264,6 +298,30 @@
+               }
+           }
+           
+          +private struct DeskPlayButton: View {
+          +    let recording: DeskRecording?
+          +    @EnvironmentObject private var app: AppState
+          +    @EnvironmentObject private var voice: VoiceService
+          +    private var active: Bool {
+          +        guard let key = recording?.parts.first else { return false }
+          +        return voice.deskReadingKey == key
+          +    }
+          +    var body: some View {
+          +        if let recording, recording.ready, !recording.parts.isEmpty {
+          +            Button {
+          +                if active { voice.stopPlayback() }
+          +                else { voice.readDeskRecording(recording, api: app.api) }
+          +            } label: {
+          +                Label(active ? "停止朗读" : "播放朗读", systemImage: active ? "stop.circle" : "play.circle")
+          +            }
+          +            .buttonStyle(.borderless).disabled(app.callActive || voice.recording)
+          +            .foregroundStyle(LokiDesign.gold)
+          +        } else if recording != nil {
+          +            Text("待预录").font(.caption).foregroundStyle(LokiDesign.muted)
+          +        }
+          +    }
+          +}
+          +
+           private extension View {
+               func deskPaper() -> some View {
+                   padding(16).frame(maxWidth: .infinity, alignment: .leading).lokiPanel()
+          --- a/Sources/App/LokiApp.swift
+          +++ b/Sources/App/LokiApp.swift
+          @@ -50,6 +50,7 @@
+                       } message: { Text(app.notice ?? "") }
+                       .onChange(of: phase) { _, value in
+                           call.setForeground(value == .active)
+          +                if value == .background { CompanionInteraction.shared.leaveApp() }
+                           if value != .active { app.leftForeground() }
+                           if value == .active {
+                               app.restoreProtectedChat()
+          @@ -75,6 +76,15 @@
+                           if value { Task { await alarms.autoSyncCourses(api: app.api); await app.syncWallpaperReceipt(); await app.refreshCompanion(voice: voice) } }
+                       }
+                       .onChange(of: voice.playing || voice.recording) { _, value in music.voiceSpeaking(value) }
+          +            .onChange(of: voice.recording || call.active) { _, value in CompanionInteraction.shared.setRecording(value) }
+          +            .task(id: phase == .active) {
+          +                guard phase == .active else { return }
+          +                CompanionInteraction.shared.setRecording(voice.recording || call.active)
+          +                while !Task.isCancelled {
+          +                    CompanionInteraction.shared.heartbeat()
+          +                    do { try await Task.sleep(for: .seconds(15)) } catch { return }
+          +                }
+          +            }
+                       .onChange(of: voice.playing) { _, value in Task { await ChatLiveActivity.shared.speaking(value) } }
+                       .onOpenURL { url in
+                           if url.scheme == "loki", url.host == "chat" {
+          --- a/Sources/App/MoodStrip.swift
+          +++ b/Sources/App/MoodStrip.swift
+          @@ -4,6 +4,7 @@
+               let affection: Int
+               let irritation: Int
+               let mood: Int
+          +    let closeness: Int?
+           }
+           
+           struct MoodStrip: View {
+          @@ -16,9 +17,12 @@
+                           Text(String(state.mood)).font(.callout.weight(.medium)).monospacedDigit()
+                       }
+                       .accessibilityElement(children: .combine)
+          -            VStack(spacing: 4) {
+          +            VStack(spacing: 3) {
+                           meter("好感度", state.affection, Color(red: 0.94, green: 0.64, blue: 0.67))
+                           meter("烦躁度", state.irritation, LokiDesign.gold)
+          +                if let closeness = state.closeness {
+          +                    meter("亲近欲", closeness, Color(red: 0.82, green: 0.66, blue: 0.89))
+          +                }
+                       }
+                   }
+                   .foregroundStyle(LokiDesign.ink)
+          --- a/Sources/App/Notifications.swift
+          +++ b/Sources/App/Notifications.swift
+          @@ -75,10 +75,14 @@
+                                           withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+                   let route = ChatPushRoute(payload: notification.request.content.userInfo)
+                   let date = notification.date
+          +        let reminder = notification.request.content.userInfo["unanswered_reminder"] as? Bool == true
+                   Task { @MainActor in
+                       let inbox = ChatNotificationInbox()
+                       if let route { inbox.observe(route, at: date, systemDated: true) }
+                       if case .reply? = route { completionHandler([]); return }
+          +            if case .care? = route, reminder || CompanionInteraction.shared.composing {
+          +                completionHandler([]); return
+          +            }
+                       if let route, inbox.wasConsumed(route) { completionHandler([]); return }
+                       completionHandler([.banner, .sound])
+                   }
+          --- a/Sources/App/VoiceService.swift
+          +++ b/Sources/App/VoiceService.swift
+          @@ -8,6 +8,7 @@
+               @Published var playing = false
+               @Published private(set) var playingMessageID: UUID?
+               @Published private(set) var finishedReplyID: UUID?
+          +    @Published private(set) var deskReadingKey: String?
+               private var currentReplyID: UUID?
+               @Published var draftRecording: RecordedVoice?
+               @Published var recordingSeconds: Double = 0
+          @@ -115,9 +116,33 @@
+                   streamTask?.cancel(); streamTask = nil; streamID = UUID(); pcm.stop()
+                   player?.stop(); player = nil; playing = false
+                   playingMessageID = nil
+          +        deskReadingKey = nil
+                   currentReplyID = nil
+                   synthesizer.stopSpeaking(at: .immediate)
+                   if releaseSession && !recording { audioSession.release() }
+          +    }
+          +    func readDeskRecording(_ recording: DeskRecording, api: MobileAPI) {
+          +        guard recording.ready, let key = recording.parts.first, !self.recording else { return }
+          +        stopPlayback(releaseSession: false)
+          +        let id = streamID
+          +        deskReadingKey = key
+          +        streamTask = Task { @MainActor [weak self] in
+          +            guard let self else { return }
+          +            defer { if self.streamID == id { self.stopPlayback() } }
+          +            do {
+          +                for part in recording.parts {
+          +                    let audio = try await DeskSync.shared.recording(part, api: api)
+          +                    try Task.checkCancellation()
+          +                    guard self.streamID == id else { return }
+          +                    try await self.play(audio)
+          +                    guard self.streamID == id, !Task.isCancelled else { return }
+          +                    let finished = await withCheckedContinuation { self.playbackCompletion = $0 }
+          +                    guard finished else { return }
+          +                }
+          +            } catch {
+          +                if self.streamID == id && !(error is CancellationError) { self.errorMessage = self.playbackError(error) }
+          +            }
+          +        }
+               }
+               private func finishPlaybackWaiter(_ finished: Bool) {
+                   let completion = playbackCompletion; playbackCompletion = nil
+          @@ -338,6 +363,11 @@
+               nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+                   Task { @MainActor [weak self] in
+                       guard let self, self.player === player else { return }
+          +            if self.deskReadingKey != nil {
+          +                self.player = nil
+          +                self.finishPlaybackWaiter(flag)
+          +                return
+          +            }
+                       let next = self.lookahead; self.lookahead = nil
+                       if flag, let id = self.currentReplyID { self.finishedReplyID = id }
+                       self.finishPlaybackWaiter(flag)
+          --- /dev/null
+          +++ b/Tests/CompanionInteractionRegression/main.swift
+          @@ -0,0 +1,58 @@
+          +import Foundation
+          +
+          +enum SecureToken {
+          +    static func read() -> String { "test" }
+          +}
+          +
+          +struct MobileAPI {
+          +    let base: String
+          +    let token: String
+          +    @MainActor static var samples: [(active: Bool, typing: Bool, session: String)] = []
+          +
+          +    @MainActor func data(_ path: String, _ body: [String: Any], timeout: Double) async throws -> Data {
+          +        precondition(path == "/v1/care/interaction")
+          +        precondition(Set(body.keys) == ["foreground", "typing", "observed_at", "session_id"])
+          +        guard let active = body["foreground"] as? Bool, let typing = body["typing"] as? Bool,
+          +              let session = body["session_id"] as? String, UUID(uuidString: session) != nil,
+          +              let observed = body["observed_at"] as? Double, observed > 0 else { fatalError("Invalid interaction") }
+          +        Self.samples.append((active, typing, session))
+          +        return Data()
+          +    }
+          +}
+          +
+          +@main struct CompanionInteractionRegression {
+          +    @MainActor static func requireCount(_ expected: Int) async throws {
+          +        for _ in 0..<100 {
+          +            if MobileAPI.samples.count >= expected { break }
+          +            try await Task.sleep(for: .milliseconds(10))
+          +        }
+          +        precondition(MobileAPI.samples.count == expected)
+          +    }
+          +
+          +    @MainActor static func main() async throws {
+          +        UserDefaults.standard.set("test", forKey: "gatewayURL")
+          +        defer { UserDefaults.standard.removeObject(forKey: "gatewayURL") }
+          +        let interaction = CompanionInteraction()
+          +        interaction.heartbeat()
+          +        try await requireCount(1)
+          +        precondition(!interaction.composing && MobileAPI.samples[0].active)
+          +        for _ in 0..<150 { interaction.edited() }
+          +        try await requireCount(2)
+          +        precondition(interaction.composing && MobileAPI.samples[1].typing)
+          +        try await Task.sleep(for: .milliseconds(7200))
+          +        try await requireCount(3)
+          +        precondition(!interaction.composing && !MobileAPI.samples[2].typing)
+          +        interaction.setRecording(true)
+          +        interaction.edited()
+          +        interaction.endEditing()
+          +        try await requireCount(4)
+          +        precondition(interaction.composing)
+          +        interaction.leaveApp()
+          +        interaction.edited()
+          +        try await requireCount(5)
+          +        precondition(!interaction.composing && !MobileAPI.samples[4].active && !MobileAPI.samples[4].typing)
+          +        interaction.heartbeat()
+          +        try await requireCount(6)
+          +        precondition(!interaction.composing && Set(MobileAPI.samples.map { $0.session }).count == 1)
+          +    }
+          +}
+          PUBLIC_DIFF
+          patch --batch -p1 < "$RUNNER_TEMP/notification.patch"
+          shasum -a 256 -c <<'SOURCE_AFTER'
+          16a80076886ddd2e73c90ec387e052666722a594d0b5252600ed29ae8dc878c5  Sources/App/AppState.swift
+          46bba294a6227f8d9add55bcec6717968cb237649fdd8979d4401c113cec0c41  Sources/App/ChatView.swift
+          856691df37cc8a44044e858a8087875600fe2e5e210153a87cfd1a97904bc378  Sources/App/CompanionInteraction.swift
+          2a2f67e36deded0ca15097df7e242431760549ed09b0b9f4aca7704a4a74ddfc  Sources/App/DeskSync.swift
+          5c29cb2e8801eb2ba89bcf18bc072d9bdfa1ea2a4228c36625bb32e5ec21a783  Sources/App/DeskView.swift
+          152c117d894f5913341dc2703ee544205f032f612e9c6312cbd91ef92d32bcba  Sources/App/LokiApp.swift
+          961470c0e9d5706db15cabb7e86298ff10def7c77e1ea19fd221253a40446c09  Sources/App/MoodStrip.swift
+          08aa2911ef679217c8a6c9d5d2203a146db90937b648db1207a7f0bc95b9246a  Sources/App/Notifications.swift
+          7ae4cabe1c9fc595cec1142ba72e05f40a815682ad897e0635cac20dfb59f319  Sources/App/VoiceService.swift
+          a893e6cbe4d43186cc7cadb7009bdc5f144553e1adbf132c018bc61086e6bb30  Tests/CompanionInteractionRegression/main.swift
+          SOURCE_AFTER
+          python3 - <<'BUMP'
+          from pathlib import Path
+          p=Path('project.yml')
+          s=p.read_text()
+          assert '112103' in s and '112104' not in s
+          p.write_text(s.replace('112103','112104'))
+          BUMP
+      - name: Test app presence, typing and voice activity
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc -swift-version 5 -parse-as-library Sources/App/CompanionInteraction.swift Tests/CompanionInteractionRegression/main.swift -o "$RUNNER_TEMP/test-interaction"
+          "$RUNNER_TEMP/test-interaction"
+      - name: Test message timestamps and legacy conversation order
+        shell: bash
+        working-directory: app-source
+        run: |
+          swiftc Sources/App/Models.swift Sources/App/ChatHistoryTiming.swift Tests/MessageTimes/main.swift -o "$RUNNER_TEMP/loki-message-times"
+          "$RUNNER_TEMP/loki-message-times"
+      - name: Test notification routing and inbox
+        shell: bash
+        working-directory: app-source
+        run: |
+          swiftc Sources/App/ChatNotificationInbox.swift Tests/NotificationRouting/main.swift -o "$RUNNER_TEMP/loki-notification-routing"
+          "$RUNNER_TEMP/loki-notification-routing"
+      - name: Test public reasoning and tool display
+        shell: bash
+        working-directory: app-source
+        run: |
+          awk '/^struct ChatItem:/ { exit } { print }' Sources/App/Models.swift > "$RUNNER_TEMP/display-tests.swift"
+          cat >> "$RUNNER_TEMP/display-tests.swift" <<'SWIFT'
+          let prefix = "Activity · Compare the two options."
+          let tool = "Used the music search tool."
+          let stages = "Activity · Received your message.\nWriting the reply."
+          precondition(TurnProgressContent(summary: prefix, activity: tool).summary == prefix)
+          precondition(TurnProgressContent(summary: prefix, activity: tool).activity == tool)
+          precondition(TurnProgressContent(summary: stages).isEmpty)
+          precondition(TurnProgressContent(summary: "Activity · " + tool, activity: tool).summary == nil)
+          precondition(TurnProgressContent(summary: "Activity · " + tool, activity: tool).activity == tool)
+          precondition(TurnProgressContent(summary: "Compare the options.").summary == "Compare the options.")
+          precondition(TurnProgressContent(activity: tool).summary == nil)
+          precondition(TurnProgressContent(activity: tool).activity == tool)
+          print("Public progress and tool display regressions passed")
+          SWIFT
+          swift "$RUNNER_TEMP/display-tests.swift"
+      - name: Verify calibrated pointer math
+        run: |
+          cat app-source/Sources/App/PhonePointerMath.swift app-source/review/tests/pointer-math-check.swift > /tmp/pointer-check.swift
+          swift /tmp/pointer-check.swift
+      - name: Generate project
+        working-directory: app-source
+        run: |
+          command -v xcodegen || brew install xcodegen
+          swift scripts/generate-app-icon.swift
+          xcodegen generate --spec project.yml
+          mkdir -p build
+      - name: Compile complete App for simulator
+        working-directory: app-source
+        run: |
+          xcodebuild -project Loki.xcodeproj -scheme Loki -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath build/Simulator CODE_SIGNING_ALLOWED=NO build > build/simulator.log 2>&1 || { tail -100 build/simulator.log; exit 1; }
+      - name: Compile real iPhone architecture
+        working-directory: app-source
+        run: |
+          xcodebuild -project Loki.xcodeproj -scheme Loki -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/Device CODE_SIGNING_ALLOWED=NO build > build/device.log 2>&1 || { tail -100 build/device.log; exit 1; }
+          python3 scripts/verify-device-build.py build/Device/Build/Products/Debug-iphoneos/Loki.app
+          ditto -c -k --sequesterRsrc --keepParent build/Device/Build/Products/Debug-iphoneos/Loki.app build/Loki-screen-control-unsigned.zip
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: loki-mood-desk-112104
+          path: |
+            app-source/build/simulator.log
+            app-source/build/device.log
+            app-source/build/Loki-screen-control-unsigned.zip
+          retention-days: 1
