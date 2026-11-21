@@ -1,0 +1,1072 @@
+name: Build Loki background inbox 112102
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/background-inbox-112102.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: loki-background-inbox-112102
+  cancel-in-progress: false
+jobs:
+  app:
+    runs-on: xcode-27
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-iphone-control
+          ref: 8be1a93226edf64a2be9678f429383bc891f3dce
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: d6b09385be43ff8b595f01c0729dad073f83fd82
+          path: verified-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: bdf05059603c369e0f2cceb56890ed1fa2f7d437
+          path: prior-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 3d5400d4edd282c8353fe9ca5f811e64fa35d2a5
+          path: notify-base-recipe
+          persist-credentials: false
+      - name: Reconstruct verified public build 112101
+        shell: bash
+        run: |
+          echo 'b8b69d74335b40c4e184a420561087630597bb3520a25fb239d7e98bb151be57  notify-base-recipe/.github/workflows/notification-recovery-112101.yml' | shasum -a 256 -c -
+          ruby <<'RUBY'
+          require 'yaml'
+          steps = YAML.load_file('notify-base-recipe/.github/workflows/notification-recovery-112101.yml').fetch('jobs').fetch('app').fetch('steps')
+          ['Reconstruct verified public build 111805','Apply reviewed notification recovery changes'].each_with_index do |name, i|
+            matching = steps.select { |s| s['name'] == name }
+            abort('Missing prior step') unless matching.size == 1
+            step = matching.first
+            directory = i == 0 ? '.' : 'app-source'
+            abort('Unexpected path') unless step.fetch('working-directory','.') == directory
+            system('/bin/bash','-e','-o','pipefail','-c',step.fetch('run'), chdir: directory) or abort(name)
+          end
+          RUBY
+      - name: Apply reviewed background inbox changes
+        working-directory: app-source
+        shell: bash
+        run: |
+          python3 - <<'SOURCE_BEFORE'
+          from hashlib import sha256
+          from pathlib import Path
+          before={'Sources/App/API.swift': '7c64f17d9b8e36023344fe30f7ef02a88fc7c9054221420274f7206f07aa5dd7', 'Sources/App/AppState.swift': '89767e72f48d5737462e2b4c37628e0e437d85b68d487580e565f1be2eb5ca9a', 'Sources/App/ChatNotificationInbox.swift': 'e2596fb964449f89341c6c084b4f44495853efad596f309b7fcea6c614cba57b', 'Sources/App/ChatView.swift': 'bec932e5075e03f608dd063a79568f76fa4179145a417250aea656133eb03c4c', 'Sources/App/LokiApp.swift': 'c53be786dd9628001ceb12e5b17751c145a8d5db713f0e250ae4e7f4eb621ca3', 'Sources/App/Models.swift': 'b73141282ae1703758e11f533f5d300328dcdd6251094e0cdc8c3f8972c2fd77', 'Sources/App/Notifications.swift': 'c7e503c28862cbde45b2a7e36ff6f6a0bd0469825c5ae691a9b53dbea5c6edb1', 'Sources/App/OutgoingMessage.swift': '4651e62c6f88c7736c3697a2a15f8486362aff5eb70a3c19f21bc64cf9c9ac1e', 'Tests/NotificationRouting/main.swift': '291a5cb0b748ecb1414138c2bd5bc4cb34a9aaf2a89b3ddaeda69fb598aa585d'}
+          for name, expected in before.items():
+              p=Path(name)
+              data=p.read_bytes().replace(b'\r\n', b'\n')
+              assert sha256(data).hexdigest()==expected,name
+              p.write_bytes(data)
+          new_paths=['Sources/App/BackgroundChatInbox.swift', 'Sources/App/ChatHistoryTiming.swift', 'Tests/MessageTimes/main.swift']
+          for name in new_paths:
+              assert not Path(name).exists(),name
+              Path(name).parent.mkdir(parents=True,exist_ok=True)
+          SOURCE_BEFORE
+          cat > "$RUNNER_TEMP/notification.patch" <<'PUBLIC_DIFF'
+          --- a/Sources/App/API.swift
+          +++ b/Sources/App/API.swift
+          @@ -1,6 +1,8 @@
+           import Foundation
+           
+           struct MobileReply: Decodable {
+          +    let message_at: Double?
+          +    let message_time_source: String?
+               let loki_mood: LokiMood?
+               let read_without_reply: Bool?
+               let text: String
+          @@ -172,7 +174,7 @@
+                   guard receipt.accepted, receipt.id == body["id"] as? String else { throw LokiError.message("尚未确认消息送达。") }
+               }
+               func replyToAccepted(id: UUID, retry: Bool = false,
+          -                         onProgress: @escaping @MainActor (TurnProgressContent) -> Void) async throws -> MobileReply {
+          +                         onProgress: @escaping @MainActor (TurnProgressContent) -> Void) async throws -> (MobileReply, observedCompletion: Bool) {
+                   // Only explicit retry can repeat an uncertain generation. Polling is read-only.
+                   if retry {
+                       let updates = Task {
+          @@ -184,27 +186,29 @@
+                           }
+                       }
+                       defer { updates.cancel() }
+          -            return try JSONDecoder().decode(MobileReply.self, from: await data("/v1/chat/run", ["id": id.uuidString, "retry": true]))
+          +            return (try JSONDecoder().decode(MobileReply.self, from: await data("/v1/chat/run", ["id": id.uuidString, "retry": true])), false)
+                   }
+                   var cursor: String?
+          +        var sawRunning = false
+                   while true {
+                       try Task.checkCancellation()
+                       let inbox: [String: Data] = PrivateFiles.load("received-replies.json", fallback: [:])
+                       if let cached = inbox[id.uuidString],
+                          let status = try? JSONDecoder().decode(ChatRequestStatus.self, from: cached),
+          -               status.state == "complete", let reply = status.reply { return reply }
+          +               status.state == "complete", let reply = status.reply { return (reply, false) }
+                       var poll: [String: Any] = ["id": id.uuidString, "live_updates": true]
+                       if let cursor { poll["cursor"] = cursor }
+                       let status = try JSONDecoder().decode(ChatRequestStatus.self, from: await data("/v1/chat/status", poll, timeout: 10))
+                       cursor = status.cursor
+                       if status.state == "running" {
+          +                sawRunning = true
+                           await onProgress(TurnProgressContent(summary: status.thinking_summary, activity: status.activity_log))
+                       }
+          -            if let reply = status.reply, status.state == "complete" { return reply }
+          +            if let reply = status.reply, status.state == "complete" { return (reply, sawRunning) }
+                       if status.state == "failed" { throw LokiError.replyGenerationFailed("消息已送达，但回复生成中断。点感叹号可重试。") }
+                       if status.state == "accepted" {
+                           // Compatibility with requests accepted before the async runner existed.
+          -                return try JSONDecoder().decode(MobileReply.self, from: await data("/v1/chat/run", ["id": id.uuidString]))
+          +                return (try JSONDecoder().decode(MobileReply.self, from: await data("/v1/chat/run", ["id": id.uuidString])), true)
+                       }
+                       if status.state == "missing" { throw LokiError.message("正在核对消息接收状态。") }
+                       if cursor == nil { try await Task.sleep(for: .seconds(1)) }
+          --- a/Sources/App/AppState.swift
+          +++ b/Sources/App/AppState.swift
+          @@ -38,6 +38,10 @@
+               private var wallpaperReceipts: [String] = []
+               private var syncingWallpaper = false
+               private var lastCareConfiguration = ""
+          +    private(set) var foregroundEpoch = 0
+          +    func leftForeground() { foregroundEpoch &+= 1 }
+          +    private var reconcilingTimestamps = false
+          +    private var drainingNotificationReplies = false
+               private var outbox: [String: OutgoingMessage] = [:]
+               private var chatStorageReady = false
+               private var deliveryQueue: [@MainActor () async -> Void] = []
+          @@ -160,6 +164,107 @@
+                   return true
+               }
+               private func saveOutbox() throws { try PrivateFiles.save(outbox, "outgoing.json") }
+          +    private static func timestamp(_ observation: ChatNotificationInbox.Receipt?, server: ChatMessageTime?, live: Date? = nil) -> ChatMessageTime {
+          +        let receipt = observation.map { ChatMessageTime(date: $0.date, source: $0.systemDated ? .notification : .device) }
+          +        let observed = ChatMessageTime.preferred(receipt, live.map { ChatMessageTime(date: $0, source: .device) })
+          +        // With an older gateway and no evidence, date is an insertion key only.
+          +        // The UI never displays it as the receipt time.
+          +        return observed ?? server ?? ChatMessageTime(date: Date(), source: .unknown)
+          +    }
+          +    private func replyTimestamp(_ reply: MobileReply, id: UUID, live: Date? = nil) -> ChatMessageTime {
+          +        Self.timestamp(ChatNotificationInbox().observedDelivery(replyID: id),
+          +            server: .server(reply.message_at, source: reply.message_time_source), live: live)
+          +    }
+          +
+          +    func reconcileNotificationReplies() async {
+          +        guard unlocked, paired, restoreProtectedChat(), !drainingNotificationReplies else { return }
+          +        drainingNotificationReplies = true; defer { drainingNotificationReplies = false }
+          +        let inbox = ChatNotificationInbox()
+          +        for id in inbox.pendingBackgroundReplies where outbox[id.uuidString] == nil {
+          +            guard !Task.isCancelled, unlocked else { return }
+          +            do {
+          +                if !messages.contains(where: { $0.replyingTo == id }) {
+          +                    let status: ChatRequestStatus
+          +                    if let bytes = try BackgroundChatInbox.cachedReply(id: id) {
+          +                        status = try JSONDecoder().decode(ChatRequestStatus.self, from: bytes)
+          +                    } else { status = try await api.chatStatus(id: id) }
+          +                    guard !Task.isCancelled, unlocked, outbox[id.uuidString] == nil else { return }
+          +                    if ["failed", "missing"].contains(status.state) { inbox.finishBackgroundReply(id); continue }
+          +                    guard status.state == "complete", let reply = status.reply else { continue }
+          +                    if reply.read_without_reply != true && !messages.contains(where: { $0.replyingTo == id }) {
+          +                        try await showReply(reply.speech_text ?? reply.text, voice: nil, autoVoice: false,
+          +                            replyingTo: id, timestamp: replyTimestamp(reply, id: id))
+          +                    }
+          +                }
+          +                try await api.event(kind: "delivery", body: ["request_id": id.uuidString, "stage": "client_stored"])
+          +                try BackgroundChatInbox.clearReply(id: id)
+          +                inbox.finishBackgroundReply(id)
+          +            } catch { continue }
+          +        }
+          +    }
+          +
+          +    private func updateTimes(observations: [String: ChatNotificationInbox.Receipt],
+          +                             care: [String: ServerChatTime], replies: [String: ServerChatTime]) throws {
+          +        guard !observations.isEmpty || !care.isEmpty || !replies.isEmpty else { return }
+          +        var updated = messages
+          +        var changed = ChatHistoryTiming.identifyCareSentences(in: &updated, evidence: care)
+          +        for index in updated.indices where updated[index].role == "assistant" {
+          +            let item = updated[index]
+          +            let server: ServerChatTime?
+          +            var observed: ChatNotificationInbox.Receipt?
+          +            if let id = item.replyingTo {
+          +                server = replies[id.uuidString]
+          +                observed = observations[ChatNotificationInbox.key(replyID: id)]
+          +            } else if let key = item.careEventID {
+          +                server = care[key]
+          +                if let locator = server?.notice_id ?? item.careNoticeID {
+          +                    observed = observations[ChatNotificationInbox.key(careLocator: locator)]
+          +                    if item.careNoticeID != locator { updated[index].careNoticeID = locator; changed = true }
+          +                }
+          +            } else { continue }
+          +            guard server?.timestamp != nil || observed != nil else { continue }
+          +            let candidate = Self.timestamp(observed, server: server?.timestamp)
+          +            let old = item.timeSource.map { ChatMessageTime(date: item.date, source: $0) }
+          +            guard let best = ChatMessageTime.preferred(old, candidate),
+          +                  item.date != best.date || item.timeSource != best.source else { continue }
+          +            updated[index].applyTime(best)
+          +            changed = true
+          +        }
+          +        guard changed else { return }
+          +        updated.sort { $0.date < $1.date }
+          +        try PrivateFiles.save(updated, "chat.json")
+          +        messages = updated
+          +    }
+          +
+          +    func reconcileMessageTimes() async {
+          +        guard unlocked, restoreProtectedChat(), !reconcilingTimestamps else { return }
+          +        reconcilingTimestamps = true; defer { reconcilingTimestamps = false }
+          +        let inbox = ChatNotificationInbox()
+          +        do {
+          +            try updateTimes(observations: inbox.observedDeliveries, care: [:], replies: [:])
+          +            let marker = "chatMessageTimesReconciled.1"
+          +            guard paired, !UserDefaults.standard.bool(forKey: marker) else { return }
+          +            var seen = Set<String>()
+          +            let rows: [(reply: String?, care: String?)] = messages.reversed().compactMap { item in
+          +                guard item.role == "assistant", item.timeSource == nil || item.timeSource == .unknown else { return nil }
+          +                if let key = item.careEventID, seen.insert("c/" + key).inserted { return (nil, key) }
+          +                if let id = item.replyingTo?.uuidString, seen.insert("r/" + id).inserted { return (id, nil) }
+          +                return nil
+          +            }
+          +            struct Response: Decodable { let care: [String: ServerChatTime]; let replies: [String: ServerChatTime] }
+          +            for start in stride(from: 0, to: rows.count, by: 128) {
+          +                guard !Task.isCancelled, unlocked else { return }
+          +                let batch = rows[start..<min(rows.count, start + 128)]
+          +                let bytes = try await api.data("/v1/chat/message-times", ["care_ids": batch.compactMap { $0.care },
+          +                    "reply_ids": batch.compactMap { $0.reply }], timeout: 10)
+          +                let response = try JSONDecoder().decode(Response.self, from: bytes)
+          +                guard !Task.isCancelled, unlocked else { return }
+          +                let replies = response.replies.reduce(into: [String: ServerChatTime]()) { $0[$1.key.uppercased()] = $1.value }
+          +                try updateTimes(observations: inbox.observedDeliveries, care: response.care, replies: replies)
+          +            }
+          +            UserDefaults.standard.set(true, forKey: marker)
+          +        } catch { /* Leave the migration pending until the next foreground session. */ }
+          +    }
+               func resolveTappedReply() async {
+                   let taps = ChatNotificationInbox()
+                   guard unlocked, restoreProtectedChat(), let id = taps.pendingReply else { return }
+          @@ -189,7 +294,8 @@
+                       }
+                       if status.state == "complete", let reply = status.reply, reply.read_without_reply != true {
+                           if !messages.contains(where: { $0.replyingTo == id }), outbox[id.uuidString] == nil {
+          -                    try await showReply(reply.speech_text ?? reply.text, voice: nil, autoVoice: false, replyingTo: id)
+          +                    try await showReply(reply.speech_text ?? reply.text, voice: nil, autoVoice: false, replyingTo: id,
+          +                        timestamp: replyTimestamp(reply, id: id))
+                           }
+                           guard let bubble = messages.first(where: { $0.replyingTo == id }), taps.pendingReply == id else { return }
+                           tappedChatMessage = bubble.id
+          @@ -222,7 +328,10 @@
+                       }
+                       if draft.requestBody != nil {
+                           do {
+          -                    let status = try await api.chatStatus(id: draft.id)
+          +                    let status: ChatRequestStatus
+          +                    if let bytes = try BackgroundChatInbox.cachedReply(id: draft.id) {
+          +                        status = try JSONDecoder().decode(ChatRequestStatus.self, from: bytes)
+          +                    } else { status = try await api.chatStatus(id: draft.id) }
+                               if status.state == "failed" { try delivery(.failed, id: draft.id); continue }
+                               if status.state != "missing" {
+                                   outbox[draft.id.uuidString]?.serverAccepted = true; try saveOutbox()
+          @@ -387,10 +496,13 @@
+                       let saved = TurnProgressContent(summary: previous?.thinkingSummary, activity: previous?.activityLog)
+                       thinkingProgress.reset(to: draft.retryRequested == true ? TurnProgressContent() : saved)
+                       activeGeneratingRequestID = id
+          -            let reply = try await api.replyToAccepted(id: id, retry: draft.retryRequested == true) { [weak self] update in
+          +            let beganInForeground = UIApplication.shared.applicationState == .active
+          +            let startedEpoch = foregroundEpoch
+          +            let (reply, observedCompletion) = try await api.replyToAccepted(id: id, retry: draft.retryRequested == true) { [weak self] update in
+                           guard let self, self.activeGeneratingRequestID == id else { return }
+                           self.thinkingProgress.receive(update)
+                       }
+          +            let liveDate = beganInForeground && startedEpoch == foregroundEpoch && observedCompletion && UIApplication.shared.applicationState == .active ? Date() : nil
+                       thinkingProgress.receive(TurnProgressContent(summary: reply.thinking_summary, activity: reply.activity_log))
+                       storeTurnProgress(id)
+                       activeGeneratingRequestID = nil
+          @@ -411,12 +523,12 @@
+                           voiceStage = "Loki 正在说话"
+                           try await showReply(reply.speech_text ?? reply.text, voice: voice, autoVoice: autoVoice,
+                               wallpaper: reply.wallpaper_change, control: reply.app_control, focus: focus, replyingTo: id,
+          -                    waitForSpeech: draft.inCall && reply.music_action == nil)
+          +                    waitForSpeech: draft.inCall && reply.music_action == nil, timestamp: replyTimestamp(reply, id: id, live: liveDate))
+                           await handleServices(reply, requestID: id, voice: voice, autoVoice: autoVoice)
+                       }
+                       outbox.removeValue(forKey: id.uuidString); try? saveOutbox()
+          -            var inbox: [String: Data] = PrivateFiles.load("received-replies.json", fallback: [:])
+          -            inbox.removeValue(forKey: id.uuidString); try? PrivateFiles.save(inbox, "received-replies.json")
+          +            try? BackgroundChatInbox.clearReply(id: id)
+          +            ChatNotificationInbox().finishBackgroundReply(id)
+                       let receiptAPI = api
+                       Task { try? await receiptAPI.event(kind: "delivery", body: ["request_id": id.uuidString, "stage": "client_stored"]) }
+                       return true
+          @@ -466,13 +578,13 @@
+           
+               private func showReply(_ text: String, voice: VoiceService?, autoVoice: Bool, wallpaper: WallpaperChange? = nil,
+                                      control: AppControl? = nil, focus: FocusService? = nil, replyingTo: UUID? = nil,
+          -                           interject: Bool = false, waitForSpeech: Bool = false, careEventID: String? = nil) async throws {
+          +                           interject: Bool = false, waitForSpeech: Bool = false, careEventID: String? = nil,
+          +                           careNoticeID: String? = nil, timestamp: ChatMessageTime? = nil) async throws {
+                   guard restoreProtectedChat() else { throw LokiError.message("暂时无法读取已有聊天记录。") }
+                   let dialogue = Self.englishDialogue(text, fallback: "I couldn't say that clearly. Ask me once more.")
+                   var items = SentenceReplies.split(dialogue).map {
+                       ChatItem(role: "assistant", text: SentenceReplies.visible($0), speechText: $0)
+                   }
+          -        if let careEventID, !items.isEmpty { items[0].careEventID = careEventID }
+                   if let change = wallpaper,
+                      UserDefaults.standard.object(forKey: "autoWallpaper") as? Bool ?? true,
+                      change.asset_id != wallpaperName,
+          @@ -495,8 +607,16 @@
+                       } else if !items.isEmpty { items[0].localActionNote = result.note }
+                   }
+                   // Commit every text bubble before playback; synthesis never gates reading.
+          -        for index in items.indices { items[index].replyingTo = replyingTo }
+          +        for index in items.indices {
+          +            items[index].replyingTo = replyingTo
+          +            items[index].careEventID = careEventID
+          +            items[index].careNoticeID = careNoticeID
+          +            if let timestamp { items[index].applyTime(timestamp) }
+          +        }
+                   var updated = messages + items
+          +        if let last = messages.last, let timestamp, timestamp.date < last.date {
+          +            updated.sort { $0.date < $1.date } // Stable for sentences from the same answer.
+          +        }
+                   if let replyingTo, let index = updated.firstIndex(where: { $0.id == replyingTo }) {
+                       updated[index].delivery = .sent
+                   }
+          @@ -597,16 +717,21 @@
+                   let taps = ChatNotificationInbox()
+                   for locator in taps.pendingCare {
+                       do {
+          -                let data = try await api.data("/v1/care/message", ["id": locator], timeout: 8)
+          +                let data: Data
+          +                if let cached = try BackgroundChatInbox.cachedCare(locator: locator),
+          +                   let item = try JSONDecoder().decode(CareEnvelope.self, from: cached).item,
+          +                   item.mayRestoreOffline { data = cached }
+          +                else { data = try await api.data("/v1/care/message", ["id": locator], timeout: 8) }
+                           if let item = try JSONDecoder().decode(CareEnvelope.self, from: data).item {
+                               try await storeCare(item, voice: voice, tapLocator: locator)
+                           }
+          +                try BackgroundChatInbox.clearCare(locator: locator)
+                           taps.remove(locator)
+                       } catch {
+                           // Keep the tap across relaunch or a temporary transport failure.
+                           // Regular inbox delivery below can still recover this or another event.
+                           if Task.isCancelled { return }
+          -                break
+          +                continue
+                       }
+                   }
+                   do {
+          @@ -636,15 +761,35 @@
+                       Task { try? await api.event(kind: "delivery", body: ["stage": "care_fetch_failed", "error": reason]) }
+                   }
+               }
+          -    private struct CareItem: Decodable { let id: String; let text: String; let speech_text: String? }
+          +    private struct CareItem: Decodable {
+          +        let id: String
+          +        let text: String
+          +        let speech_text: String?
+          +        let notice_id: String?
+          +        let message_at: Double?
+          +        let message_time_source: String?
+          +        var mayRestoreOffline: Bool {
+          +            let defaults = UserDefaults.standard
+          +            if id.hasPrefix("hrv:") || id.hasPrefix("hrv-dnd:") {
+          +                return (defaults.object(forKey: "hrvCompanionEnabled") as? Bool ?? true) && defaults.bool(forKey: "healthAutoSync")
+          +            }
+          +            if id.hasPrefix("weather:") { return defaults.bool(forKey: "weatherCompanionEnabled") }
+          +            return true
+          +        }
+          +    }
+               private struct CareEnvelope: Decodable { let item: CareItem? }
+           
+               private func storeCare(_ item: CareItem, voice: VoiceService, tapLocator: String? = nil) async throws {
+          +        let locator = item.notice_id ?? tapLocator
+          +        let observation = locator.flatMap { ChatNotificationInbox().observedDelivery(careLocator: $0) }
+          +        let stamp = Self.timestamp(observation, server: .server(item.message_at, source: item.message_time_source))
+                   if !messages.contains(where: { $0.careEventID == item.id }) {
+                       // showReply saves chat.json atomically before publishing the bubbles.
+                       try await showReply(item.speech_text ?? item.text, voice: voice,
+                           autoVoice: UserDefaults.standard.object(forKey: "autoVoice") as? Bool ?? true,
+          -                interject: true, waitForSpeech: false, careEventID: item.id)
+          +                interject: true, waitForSpeech: false, careEventID: item.id, careNoticeID: locator, timestamp: stamp)
+          +        } else if let locator, let observation {
+          +            try updateTimes(observations: [ChatNotificationInbox.key(careLocator: locator): observation], care: [:], replies: [:])
+                   }
+                   guard let bubble = messages.first(where: { $0.careEventID == item.id }) else {
+                       throw LokiError.message("主动消息尚未写入聊天记录。")
+          @@ -655,7 +800,10 @@
+                       try PrivateFiles.save(updated, "companion-received.json")
+                       receivedCare = updated
+                   }
+          -        _ = try await api.data("/v1/care/received", ["id": item.id], timeout: 8)
+          +        struct Receipt: Decodable { let stored: Bool }
+          +        let saved = try JSONDecoder().decode(Receipt.self, from: await api.data("/v1/care/received", ["id": item.id], timeout: 8))
+          +        guard saved.stored else { throw LokiError.message("等待服务器确认手机保存回执。") }
+          +        if let locator { try BackgroundChatInbox.clearCare(locator: locator); ChatNotificationInbox().remove(locator) }
+                   careStatus = "已收到 Loki 的主动消息"
+               }
+               func refreshCommands() async {
+          --- /dev/null
+          +++ b/Sources/App/BackgroundChatInbox.swift
+          @@ -0,0 +1,88 @@
+          +import Foundation
+          +import UIKit
+          +import UserNotifications
+          +
+          +@MainActor enum BackgroundChatInbox {
+          +    private static var fetching = Set<ChatPushRoute>()
+          +
+          +    private struct CareEnvelope: Decodable {
+          +        struct Item: Decodable {
+          +            let id: String
+          +            let text: String
+          +        }
+          +        let item: Item?
+          +    }
+          +    // The system may show an alert while the process never runs. The delivered
+          +    // notification retains its original delivery date until the user clears it.
+          +    static func collectDelivered() async {
+          +        let inbox = ChatNotificationInbox()
+          +        let notifications = await UNUserNotificationCenter.current().deliveredNotifications()
+          +        var present = Set<String>()
+          +        for notification in notifications {
+          +            if let route = ChatPushRoute(payload: notification.request.content.userInfo) {
+          +                inbox.observe(route, at: notification.date, systemDated: true)
+          +                present.insert(route.key)
+          +            }
+          +        }
+          +        inbox.trimConsumed(notificationsStillPresent: present)
+          +    }
+          +
+          +    private static func careURL(_ locator: String) throws -> URL {
+          +        guard let id = UUID(uuidString: locator) else { throw CocoaError(.fileReadInvalidFileName) }
+          +        return try PrivateFiles.url("received-care-" + id.uuidString + ".json")
+          +    }
+          +    static func cachedCare(locator: String) throws -> Data? {
+          +        do { return try Data(contentsOf: careURL(locator)) }
+          +        catch let error as CocoaError where error.code == .fileReadNoSuchFile { return nil }
+          +    }
+          +    static func clearCare(locator: String) throws {
+          +        do { try FileManager.default.removeItem(at: careURL(locator)) }
+          +        catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile { }
+          +    }
+          +
+          +    private static func replyCache() throws -> [String: Data] {
+          +        try ProtectedChatFile.read(PrivateFiles.url("received-replies.json"), ifMissing: [String: Data]())
+          +    }
+          +    static func cachedReply(id: UUID) throws -> Data? { try replyCache()[id.uuidString] }
+          +    static func clearReply(id: UUID) throws {
+          +        var cache = try replyCache()
+          +        if cache.removeValue(forKey: id.uuidString) != nil { try PrivateFiles.save(cache, "received-replies.json") }
+          +    }
+          +
+          +    static func fetch(_ route: ChatPushRoute, observedAt: Date?) async -> UIBackgroundFetchResult {
+          +        let inbox = ChatNotificationInbox()
+          +        let recorded = inbox.observe(route, at: observedAt, systemDated: false)
+          +        let metadataOnly: UIBackgroundFetchResult = recorded ? .newData : .noData
+          +        // The device may be locked. Neither credentials nor plaintext chat
+          +        // bodies are moved to a weaker protection class for background access.
+          +        guard UIApplication.shared.isProtectedDataAvailable, !inbox.wasConsumed(route) else { return metadataOnly }
+          +        let api = MobileAPI(base: UserDefaults.standard.string(forKey: "gatewayURL") ?? "", token: SecureToken.read())
+          +        guard !api.token.isEmpty, !api.base.isEmpty, fetching.insert(route).inserted else { return metadataOnly }
+          +        defer { fetching.remove(route) }
+          +        do {
+          +            switch route {
+          +            case .reply(let id):
+          +                if try cachedReply(id: id) != nil { return metadataOnly }
+          +                let bytes = try await api.chatStatusData(id: id)
+          +                let status = try JSONDecoder().decode(ChatRequestStatus.self, from: bytes)
+          +                guard status.state == "complete", status.reply != nil,
+          +                      UIApplication.shared.isProtectedDataAvailable, !inbox.wasConsumed(route) else { return metadataOnly }
+          +                var cache = try replyCache()
+          +                cache[id.uuidString] = bytes
+          +                try PrivateFiles.save(cache, "received-replies.json")
+          +            case .care(let id):
+          +                if try cachedCare(locator: id.uuidString) != nil { return metadataOnly }
+          +                let bytes = try await api.data("/v1/care/message", ["id": id.uuidString], timeout: 8)
+          +                let envelope = try JSONDecoder().decode(CareEnvelope.self, from: bytes)
+          +                guard let item = envelope.item, !item.text.isEmpty, !item.id.isEmpty,
+          +                      UIApplication.shared.isProtectedDataAvailable, !inbox.wasConsumed(route) else { return metadataOnly }
+          +                try bytes.write(to: careURL(id.uuidString), options: [.atomic, .completeFileProtection])
+          +            }
+          +            return .newData
+          +        } catch {
+          +            // The route stays pending. A failed body fetch is never a chat or
+          +            // read receipt, and background delivery must not invoke generation.
+          +            return .failed
+          +        }
+          +    }
+          +}
+          --- /dev/null
+          +++ b/Sources/App/ChatHistoryTiming.swift
+          @@ -0,0 +1,38 @@
+          +import Foundation
+          +import CryptoKit
+          +
+          +struct ServerChatTime: Decodable {
+          +    let message_at: Double?
+          +    let message_time_source: String?
+          +    let notice_id: String?
+          +    let body_sha256: String?
+          +    var timestamp: ChatMessageTime? { .server(message_at, source: message_time_source) }
+          +}
+          +
+          +enum ChatHistoryTiming {
+          +    /// Older versions tagged only the first sentence of a proactive message.
+          +    /// Match the entire original speech before assigning the following bubbles.
+          +    static func identifyCareSentences(in items: inout [ChatItem], evidence: [String: ServerChatTime]) -> Bool {
+          +        var changed = false
+          +        for i in items.indices {
+          +            guard let key = items[i].careEventID, items[i].timeSource == nil,
+          +                  let target = evidence[key]?.body_sha256 else { continue }
+          +            var digest = SHA256()
+          +            for j in i..<items.count {
+          +                guard items[j].role == "assistant", items[j].replyingTo == nil,
+          +                      j == i || items[j].careEventID == nil else { break }
+          +                let speech = items[j].speechText ?? items[j].text
+          +                let normalized = speech.unicodeScalars.filter { !$0.properties.isWhitespace }
+          +                digest.update(data: Data(String(String.UnicodeScalarView(normalized)).utf8))
+          +                if digest.finalize().map({ String(format: "%02x", $0) }).joined() == target {
+          +                    if j > i {
+          +                        for k in (i + 1)...j { items[k].careEventID = key }
+          +                        changed = true
+          +                    }
+          +                    break
+          +                }
+          +            }
+          +        }
+          +        return changed
+          +    }
+          +}
+          --- a/Sources/App/ChatNotificationInbox.swift
+          +++ b/Sources/App/ChatNotificationInbox.swift
+          @@ -12,8 +12,28 @@
+               }
+           }
+           
+          -// The notification delegate can run before SwiftUI installs its observers.
+          -// Persist routing identifiers only; message content belongs in protected chat storage.
+          +enum ChatPushRoute: Hashable {
+          +    case reply(UUID)
+          +    case care(UUID)
+          +
+          +    init?(payload: [AnyHashable: Any]) {
+          +        if let value = payload["care_event_id"] as? String, let id = UUID(uuidString: value) {
+          +            self = .care(id)
+          +        } else if let value = payload["reply_id"] as? String, let id = UUID(uuidString: value) {
+          +            self = .reply(id)
+          +        } else { return nil }
+          +    }
+          +
+          +    var key: String {
+          +        switch self {
+          +        case .reply(let id): return ChatNotificationInbox.key(replyID: id)
+          +        case .care(let id): return ChatNotificationInbox.key(careLocator: id.uuidString)
+          +        }
+          +    }
+          +}
+          +
+          +// Called on the main actor by the app. Defaults contain opaque routing IDs
+          +// and timing evidence only. Content stays inside fully protected files.
+           struct ChatNotificationInbox {
+               private let defaults: UserDefaults
+               init(defaults: UserDefaults = .standard) { self.defaults = defaults }
+          @@ -21,7 +41,79 @@
+               private let openKey = "pendingChatNotificationOpen"
+               private let careKey = "pendingCareNotificationLocators"
+               private let focusKey = "pendingChatNotificationFocus"
+          -    var pendingCare: [String] { defaults.stringArray(forKey: careKey) ?? [] }
+          +    private let deliveryKey = "chatNotificationDeliveries.v1"
+          +
+          +    struct Receipt: Codable, Equatable {
+          +        let date: Date
+          +        let systemDated: Bool
+          +    }
+          +
+          +    private struct Entry: Codable, Equatable {
+          +        var receipt: Receipt?
+          +        var consumedAt: Date?
+          +    }
+          +    private var entries: [String: Entry] {
+          +        guard let data = defaults.data(forKey: deliveryKey),
+          +              let result = try? PropertyListDecoder().decode([String: Entry].self, from: data) else { return [:] }
+          +        return result
+          +    }
+          +    private func save(_ values: [String: Entry]) {
+          +        if let data = try? PropertyListEncoder().encode(values) { defaults.set(data, forKey: deliveryKey) }
+          +    }
+          +
+          +    static func key(replyID: UUID) -> String { "reply/" + replyID.uuidString }
+          +    static func key(careLocator: String) -> String { "care/" + (UUID(uuidString: careLocator)?.uuidString ?? careLocator) }
+          +    private func locator(_ value: String) -> String { UUID(uuidString: value)?.uuidString.lowercased() ?? value }
+          +    var observedDeliveries: [String: Receipt] { entries.compactMapValues(\.receipt) }
+          +    func observedDelivery(replyID: UUID) -> Receipt? { entries[Self.key(replyID: replyID)]?.receipt }
+          +    func observedDelivery(careLocator: String) -> Receipt? { entries[Self.key(careLocator: careLocator)]?.receipt }
+          +
+          +    // A foreground launch may itself trigger a deferred background callback.
+          +    // It is still a pending route but its date is unknown until iOS supplies it.
+          +    @discardableResult func observe(_ route: ChatPushRoute, at date: Date?, systemDated: Bool) -> Bool {
+          +        var values = entries
+          +        let old = values[route.key]
+          +        var value = old ?? Entry()
+          +        if let date {
+          +            if let prior = value.receipt {
+          +                if (systemDated && !prior.systemDated) || (prior.systemDated == systemDated && date < prior.date) {
+          +                    value.receipt = Receipt(date: date, systemDated: systemDated)
+          +                }
+          +            } else { value.receipt = Receipt(date: date, systemDated: systemDated) }
+          +        }
+          +        guard old != value else { return false }
+          +        values[route.key] = value
+          +        save(values)
+          +        return true
+          +    }
+          +
+          +    func wasConsumed(_ route: ChatPushRoute) -> Bool { entries[route.key]?.consumedAt != nil }
+          +    private func consumed(_ key: String) {
+          +        var values = entries
+          +        guard values[key]?.consumedAt == nil else { return }
+          +        values[key, default: Entry()].consumedAt = Date()
+          +        save(values)
+          +    }
+          +    func finishBackgroundReply(_ id: UUID) { consumed(Self.key(replyID: id)) }
+          +    func trimConsumed(notificationsStillPresent: Set<String>, now: Date = Date()) {
+          +        let values = entries
+          +        let keep = values.filter { key, entry in
+          +            guard let consumed = entry.consumedAt else { return true }
+          +            return notificationsStillPresent.contains(key) || now.timeIntervalSince(consumed) < 7 * 86400
+          +        }
+          +        if keep.count != values.count { save(keep) }
+          +    }
+          +    private func pending(_ prefix: String) -> [String] {
+          +        entries.filter { $0.key.hasPrefix(prefix) && $0.value.consumedAt == nil }
+          +            .sorted { ($0.value.receipt?.date ?? .distantPast, $0.key) < ($1.value.receipt?.date ?? .distantPast, $1.key) }
+          +            .map { String($0.key.dropFirst(prefix.count)) }
+          +    }
+          +    var pendingBackgroundReplies: [UUID] { pending("reply/").compactMap(UUID.init(uuidString:)) }
+          +    private var tappedCare: [String] { (defaults.stringArray(forKey: careKey) ?? []).map(locator) }
+          +    var pendingCare: [String] {
+          +        let taps = tappedCare
+          +        return taps + pending("care/").map(locator).filter { !taps.contains($0) }
+          +    }
+               var pendingReply: UUID? {
+                   guard let value = defaults.string(forKey: focusKey), value.hasPrefix("reply/") else { return nil }
+                   return UUID(uuidString: String(value.dropFirst(6)))
+          @@ -29,10 +121,11 @@
+           
+               func tapped(careLocator: String? = nil, replyID: UUID? = nil) {
+                   defaults.set(true, forKey: openKey)
+          -        if let locator = careLocator, !locator.isEmpty {
+          +        if let raw = careLocator, !raw.isEmpty {
+          +            let locator = self.locator(raw)
+                       defaults.set("care/" + locator, forKey: focusKey)
+          -            if !pendingCare.contains(locator) {
+          -                defaults.set(pendingCare + [locator], forKey: careKey)
+          +            if !tappedCare.contains(locator) {
+          +                defaults.set(tappedCare + [locator], forKey: careKey)
+                       }
+                   } else if let replyID {
+                       defaults.set("reply/" + replyID.uuidString, forKey: focusKey)
+          @@ -41,7 +134,10 @@
+                   }
+               }
+           
+          -    func shouldFocus(care locator: String) -> Bool { defaults.string(forKey: focusKey) == "care/" + locator }
+          +    func shouldFocus(care value: String) -> Bool {
+          +        guard let focused = defaults.string(forKey: focusKey), focused.hasPrefix("care/") else { return false }
+          +        return locator(String(focused.dropFirst(5))) == locator(value)
+          +    }
+           
+               func finish(reply id: UUID) {
+                   if pendingReply == id { defaults.removeObject(forKey: focusKey) }
+          @@ -53,8 +149,9 @@
+                   return true
+               }
+           
+          -    func remove(_ locator: String) {
+          -        defaults.set(pendingCare.filter { $0 != locator }, forKey: careKey)
+          -        if shouldFocus(care: locator) { defaults.removeObject(forKey: focusKey) }
+          +    func remove(_ value: String) {
+          +        defaults.set(tappedCare.filter { $0 != locator(value) }, forKey: careKey)
+          +        if UUID(uuidString: value) != nil { consumed(Self.key(careLocator: value)) }
+          +        if shouldFocus(care: value) { defaults.removeObject(forKey: focusKey) }
+               }
+           }
+          --- a/Sources/App/ChatView.swift
+          +++ b/Sources/App/ChatView.swift
+          @@ -67,8 +67,9 @@
+                                           let previous = index > 0 ? messages[index - 1] : nil
+                                           let newDay = previous.map { !Calendar.current.isDate($0.date, inSameDayAs: message.date) } ?? true
+                                           let newGroup = newDay || previous?.role != message.role
+          +                                    || previous?.timeSource != message.timeSource || previous?.careEventID != message.careEventID
+                                               || message.date.timeIntervalSince(previous?.date ?? message.date) > 300
+          -                                if newDay { ChatDayDivider(date: message.date) }
+          +                                if newDay && message.timeSource != .unknown { ChatDayDivider(date: message.date) }
+                                           ChatBubble(message: message, beginsGroup: newGroup,
+                                                      canReplay: message.recordedVoice != nil || paired,
+                                                      isPlaying: voice.playing && voice.playingMessageID == message.id,
+          @@ -454,10 +455,15 @@
+                           if beginsGroup {
+                               HStack(spacing: 6) {
+                                   if !outgoing { Text("Loki").foregroundStyle(LokiDesign.gold) }
+          -                        Text(message.date, style: .time).foregroundStyle(LokiDesign.muted)
+          +                        if message.timeSource == .unknown {
+          +                            Text("时间未记录").foregroundStyle(LokiDesign.muted)
+          +                        } else {
+          +                            if let label = message.timeSource?.displayLabel { Text(label).foregroundStyle(LokiDesign.muted) }
+          +                            Text(message.date, style: .time).foregroundStyle(LokiDesign.muted)
+          +                        }
+                               }.font(.caption2.monospacedDigit())
+                           }
+          -                if let careLabel {
+          +                if beginsGroup, let careLabel {
+                               Label(careLabel.title, systemImage: careLabel.icon)
+                                   .font(.caption2)
+                                   .foregroundStyle(LokiDesign.gold)
+          --- a/Sources/App/LokiApp.swift
+          +++ b/Sources/App/LokiApp.swift
+          @@ -50,6 +50,7 @@
+                       } message: { Text(app.notice ?? "") }
+                       .onChange(of: phase) { _, value in
+                           call.setForeground(value == .active)
+          +                if value != .active { app.leftForeground() }
+                           if value == .active {
+                               app.restoreProtectedChat()
+                               LocationService.shared.restoreAutomatic()
+          @@ -96,6 +97,11 @@
+                               do { try await Task.sleep(for: .seconds(5)) } catch { break }
+                           }
+                       }
+          +            .task(id: app.unlocked && phase == .active) {
+          +                guard app.unlocked && phase == .active else { return }
+          +                await BackgroundChatInbox.collectDelivered()
+          +                await app.reconcileMessageTimes()
+          +            }
+                       .onReceive(NotificationCenter.default.publisher(for: .init("LokiOpenChat"))) { _ in
+                           guard app.unlocked && phase == .active else { return }
+                           if ChatNotificationInbox().takeOpen() { app.selectedTab = 0 }
+          @@ -106,6 +112,7 @@
+                           while !Task.isCancelled {
+                               await app.resolveTappedReply()
+                               await app.reconcileOutgoing(health: health, voice: voice, alarms: alarms, focus: focus)
+          +                    await app.reconcileNotificationReplies()
+                               do { try await Task.sleep(for: .seconds(3)) } catch { break }
+                           }
+                       }
+          --- a/Sources/App/Models.swift
+          +++ b/Sources/App/Models.swift
+          @@ -47,7 +47,9 @@
+               var acceptedByServer: Bool? = nil
+               var replyingTo: UUID? = nil
+               var careEventID: String? = nil
+          -    let date: Date
+          +    var date: Date
+          +    var timeSource: ChatMessageTime.Source?
+          +    var careNoticeID: String?
+               init(role: String, text: String, id: UUID = UUID(), speechText: String? = nil) {
+                   self.id = id; self.role = role; self.text = text; self.date = Date()
+                   self.speechText = speechText
+          @@ -65,6 +67,56 @@
+                   guard role == "assistant", let speechText else { return text }
+                   // Historical records must not read a hidden longer paragraph for one bubble.
+                   return Self.visible(speechText) == Self.visible(text) ? speechText : text
+          +    }
+          +}
+          +
+          +/// All device dates refer to first observation. Server dates are used only
+          +/// when iOS has no recorded delivery, and retain their original meaning.
+          +struct ChatMessageTime {
+          +    enum Source: String, Codable {
+          +        case notification, device, generated, pushSubmitted, eventCreated, unknown
+          +        var isDevice: Bool { self == .notification || self == .device }
+          +        var displayLabel: String? {
+          +            switch self {
+          +            case .generated: return "生成"
+          +            case .pushSubmitted: return "推送提交"
+          +            case .eventCreated: return "事件"
+          +            default: return nil
+          +            }
+          +        }
+          +    }
+          +    let date: Date
+          +    let source: Source
+          +
+          +    static func server(_ seconds: Double?, source: String?) -> Self? {
+          +        guard let seconds, seconds.isFinite, seconds > 0 else { return nil }
+          +        let kind: Source
+          +        switch source {
+          +        case "generated": kind = .generated
+          +        case "push_submitted": kind = .pushSubmitted
+          +        case "event_created": kind = .eventCreated
+          +        default: return nil
+          +        }
+          +        return Self(date: Date(timeIntervalSince1970: seconds), source: kind)
+          +    }
+          +
+          +    static func preferred(_ existing: Self?, _ candidate: Self?) -> Self? {
+          +        guard let candidate else { return existing }
+          +        guard let existing else { return candidate }
+          +        if existing.source.isDevice && candidate.source.isDevice {
+          +            if existing.date == candidate.date { return candidate.source == .notification ? candidate : existing }
+          +            return existing.date < candidate.date ? existing : candidate
+          +        }
+          +        if existing.source.isDevice { return existing }
+          +        if candidate.source.isDevice || existing.source == .unknown { return candidate }
+          +        return existing
+          +    }
+          +}
+          +
+          +extension ChatItem {
+          +    mutating func applyTime(_ incoming: ChatMessageTime) {
+          +        date = incoming.date
+          +        timeSource = incoming.source
+               }
+           }
+           
+          --- a/Sources/App/Notifications.swift
+          +++ b/Sources/App/Notifications.swift
+          @@ -48,25 +48,12 @@
+           final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+               func application(_ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+                                fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
+          -        guard let raw = userInfo["reply_id"] as? String, let id = UUID(uuidString: raw) else {
+          +        guard let route = ChatPushRoute(payload: userInfo) else {
+                       completionHandler(.noData); return
+                   }
+          +        let receivedAt = application.applicationState == .background ? Date() : nil
+                   Task { @MainActor in
+          -            // Keep the existing private-file and keychain protection. A locked phone
+          -            // may defer this fetch; foreground reconciliation is the durable fallback.
+          -            let drafts: [String: OutgoingMessage] = PrivateFiles.load("outgoing.json", fallback: [:])
+          -            guard drafts[id.uuidString] != nil else { completionHandler(.noData); return }
+          -            let api = MobileAPI(base: UserDefaults.standard.string(forKey: "gatewayURL") ?? "", token: SecureToken.read())
+          -            do {
+          -                let data = try await api.chatStatusData(id: id)
+          -                let status = try JSONDecoder().decode(ChatRequestStatus.self, from: data)
+          -                guard status.state == "complete", status.reply != nil else { completionHandler(.noData); return }
+          -                var inbox: [String: Data] = PrivateFiles.load("received-replies.json", fallback: [:])
+          -                inbox = inbox.filter { drafts[$0.key] != nil }
+          -                inbox[id.uuidString] = data
+          -                try PrivateFiles.save(inbox, "received-replies.json")
+          -                completionHandler(.newData)
+          -            } catch { completionHandler(.failed) }
+          +            completionHandler(await BackgroundChatInbox.fetch(route, observedAt: receivedAt))
+                   }
+               }
+               func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+          @@ -86,15 +73,27 @@
+               }
+               func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                           withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+          -        completionHandler(notification.request.content.userInfo["reply_id"] != nil ? [] : [.banner, .sound])
+          +        let route = ChatPushRoute(payload: notification.request.content.userInfo)
+          +        let date = notification.date
+          +        Task { @MainActor in
+          +            let inbox = ChatNotificationInbox()
+          +            if let route { inbox.observe(route, at: date, systemDated: true) }
+          +            if case .reply? = route { completionHandler([]); return }
+          +            if let route, inbox.wasConsumed(route) { completionHandler([]); return }
+          +            completionHandler([.banner, .sound])
+          +        }
+               }
+               func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                           withCompletionHandler completionHandler: @escaping () -> Void) {
+                   let payload = response.notification.request.content.userInfo
+                   let locator = payload["care_event_id"] as? String
+                   let id = (payload["reply_id"] as? String).flatMap(UUID.init(uuidString:))
+          +        let route = ChatPushRoute(payload: payload)
+          +        let date = response.notification.date
+                   Task { @MainActor in
+          -            ChatNotificationInbox().tapped(careLocator: locator, replyID: id)
+          +            let inbox = ChatNotificationInbox()
+          +            if let route { inbox.observe(route, at: date, systemDated: true) }
+          +            inbox.tapped(careLocator: locator, replyID: id)
+                       NotificationCenter.default.post(name: .init("LokiOpenChat"), object: nil)
+                       completionHandler()
+                   }
+          --- a/Sources/App/OutgoingMessage.swift
+          +++ b/Sources/App/OutgoingMessage.swift
+          @@ -29,9 +29,11 @@
+                   }
+                   for draft in drafts.sorted(by: { $0.createdAt < $1.createdAt }) where !messages.contains(where: { $0.id == draft.id }) {
+                       var item = ChatItem(role: "user", text: draft.text + (draft.image == nil ? "" : "\n[附照片]"), id: draft.id)
+          +            item.date = draft.createdAt
+                       item.recordedVoice = draft.recording; item.delivery = draft.serverAccepted == true ? .waitingReply : .queued
+                       item.acceptedByServer = draft.serverAccepted
+          -            messages.append(item)
+          +            let index = messages.firstIndex { $0.date > item.date } ?? messages.endIndex
+          +            messages.insert(item, at: index)
+                   }
+                   return messages
+               }
+          --- /dev/null
+          +++ b/Tests/MessageTimes/main.swift
+          @@ -0,0 +1,41 @@
+          +import Foundation
+          +import CryptoKit
+          +
+          +// Models.swift references these payloads. This standalone test exercises the
+          +// production timing code without linking the phone recorder or UIKit.
+          +struct RecordedVoice: Codable {}
+          +enum MessageDelivery: String, Codable { case sent }
+          +
+          +let early = Date(timeIntervalSince1970: 100)
+          +let later = Date(timeIntervalSince1970: 200)
+          +let generated = ChatMessageTime.server(100, source: "generated")!
+          +let received = ChatMessageTime(date: later, source: .notification)
+          +precondition(ChatMessageTime.preferred(generated, received)?.date == later)
+          +precondition(ChatMessageTime.preferred(received, generated)?.date == later)
+          +precondition(ChatMessageTime.preferred(received, .init(date: early, source: .device))?.date == early)
+          +precondition(ChatMessageTime.server(0, source: "generated") == nil)
+          +precondition(ChatMessageTime.server(100, source: "event_created")?.source.displayLabel == "事件")
+          +
+          +var first = ChatItem(role: "assistant", text: "One.", speechText: "One.")
+          +first.careEventID = "event"
+          +let second = ChatItem(role: "assistant", text: "Two.", speechText: "(laugh) Two.")
+          +let other = ChatItem(role: "assistant", text: "Separate.")
+          +let key = SHA256.hash(data: Data("One.(laugh)Two.".utf8)).map { String(format: "%02x", $0) }.joined()
+          +let row = ServerChatTime(message_at: 100, message_time_source: "event_created", notice_id: nil, body_sha256: key)
+          +var items = [first, second, other]
+          +precondition(ChatHistoryTiming.identifyCareSentences(in: &items, evidence: ["event": row]))
+          +precondition(items.map(\.careEventID) == ["event", "event", nil])
+          +var mismatch = [first, other]
+          +precondition(!ChatHistoryTiming.identifyCareSentences(in: &mismatch, evidence: ["event": row]))
+          +precondition(mismatch[1].careEventID == nil)
+          +var taggedOther = second
+          +taggedOther.replyingTo = UUID()
+          +var blocked = [first, taggedOther]
+          +precondition(!ChatHistoryTiming.identifyCareSentences(in: &blocked, evidence: ["event": row]))
+          +let oldBytes = try JSONEncoder().encode(first)
+          +var old = try JSONDecoder().decode(ChatItem.self, from: oldBytes)
+          +precondition(old.timeSource == nil)
+          +old.applyTime(received)
+          +let restored = try JSONDecoder().decode(ChatItem.self, from: JSONEncoder().encode(old))
+          +precondition(restored.timeSource == .notification && restored.date == later)
+          +print("Message timestamps passed")
+          --- a/Tests/NotificationRouting/main.swift
+          +++ b/Tests/NotificationRouting/main.swift
+          @@ -44,4 +44,37 @@
+               _ = try ProtectedChatFile.read(testFile, ifMissing: [String]())
+               fatalError("An unreadable history cannot be treated as a new history")
+           } catch is DecodingError {}
+          +
+          +let noteID = UUID()
+          +let remoteCare = ChatPushRoute.care(noteID)
+          +let arrival = Date(timeIntervalSince1970: 1_700_000_005)
+          +let callback = arrival.addingTimeInterval(90)
+          +precondition(ChatPushRoute(payload: ["care_event_id": noteID.uuidString.lowercased()]) == remoteCare)
+          +precondition(ChatPushRoute(payload: ["reply_id": reply.uuidString]) == .reply(reply))
+          +precondition(ChatPushRoute(payload: ["care_event_id": "other unrelated input"]) == nil)
+          +delegate.observe(remoteCare, at: callback, systemDated: false)
+          +precondition(!scene.takeOpen() && scene.pendingCare == [noteID.uuidString.lowercased()])
+          +precondition(scene.observedDelivery(careLocator: noteID.uuidString)?.systemDated == false)
+          +precondition(!delegate.observe(remoteCare, at: callback.addingTimeInterval(30), systemDated: false))
+          +// Scanning Notification Center or tapping long after the banner uses its date.
+          +delegate.observe(remoteCare, at: arrival, systemDated: true)
+          +delegate.observe(remoteCare, at: arrival.addingTimeInterval(-3), systemDated: false)
+          +precondition(scene.observedDelivery(careLocator: noteID.uuidString.lowercased())?.date == arrival)
+          +precondition(scene.observedDelivery(careLocator: noteID.uuidString)?.systemDated == true)
+          +scene.remove(noteID.uuidString)
+          +delegate.observe(remoteCare, at: arrival, systemDated: true)
+          +precondition(scene.pendingCare.isEmpty && scene.wasConsumed(remoteCare))
+          +// A delayed callback during launch has no evidence of an earlier delivery.
+          +delegate.observe(.reply(reply), at: nil, systemDated: false)
+          +precondition(scene.pendingBackgroundReplies == [reply] && scene.observedDelivery(replyID: reply) == nil)
+          +scene.finishBackgroundReply(reply)
+          +delegate.observe(.reply(reply), at: arrival, systemDated: true)
+          +precondition(scene.pendingBackgroundReplies.isEmpty && scene.observedDelivery(replyID: reply)?.date == arrival)
+          +precondition(scene.observedDeliveries[ChatNotificationInbox.key(replyID: reply)]?.systemDated == true)
+          +let muchLater = Date().addingTimeInterval(10 * 86400)
+          +let newID = UUID()
+          +delegate.observe(.reply(newID), at: callback, systemDated: false)
+          +scene.trimConsumed(notificationsStillPresent: [remoteCare.key], now: muchLater)
+          +precondition(scene.wasConsumed(remoteCare) && scene.observedDelivery(replyID: reply) == nil)
+          +precondition(scene.pendingBackgroundReplies == [newID])
+           print("Notification routing passed")
+          PUBLIC_DIFF
+          patch --batch -p1 < "$RUNNER_TEMP/notification.patch"
+          shasum -a 256 -c <<'SOURCE_AFTER'
+          6a3a70851b50c3739167ad5812606eb33372d3654d31df00a868dac95af8d4be  Sources/App/API.swift
+          4149ed308798c7216df59ac232da5df366fd28121111c7c183e97130bb646649  Sources/App/AppState.swift
+          f194a35714a842543a5390630e009ff8ba4873d4d2316f3b3f56478cdaf983fb  Sources/App/BackgroundChatInbox.swift
+          eeafcf3647f3c75ed5b98b5f7cc0aba02e7fd96eaee97e8a1032ceafaca9d74a  Sources/App/ChatHistoryTiming.swift
+          d5b9a4b6142d2c45168261acb6561b6f34d7f4ed556d5f1d376500901b41eef9  Sources/App/ChatNotificationInbox.swift
+          89b9fb91c5e7307240f11d84ec1799314a0d77cfba6e59f3177ec5188d199465  Sources/App/ChatView.swift
+          5359a00429b89bb451d8cf19c71b7959abb3c100512144d9f43a1397ed25a63c  Sources/App/LokiApp.swift
+          4e38f39356562156048ad6a1583b01cc9bd35c016b61eca0954b4909bbf02273  Sources/App/Models.swift
+          05af2cc1a3578bb5ef53064c78938922944ba4228da5fbc4bfd96389e1caeae2  Sources/App/Notifications.swift
+          f499c1b7f59c29967c5964a549ab5a89399a687e07a55345aa59472cdc49348d  Sources/App/OutgoingMessage.swift
+          7be662130e9302131ca09bab6d7bee4ff403ceabee0fb1b8564ad7114e5c651d  Tests/MessageTimes/main.swift
+          1481e1ac2455899b9a3163195c683fbdc742ffcf4ddd47cff5642c5bd044d43a  Tests/NotificationRouting/main.swift
+          SOURCE_AFTER
+          python3 - <<'BUMP'
+          from pathlib import Path
+          p=Path('project.yml')
+          s=p.read_text()
+          assert '112101' in s and '112102' not in s
+          p.write_text(s.replace('112101','112102'))
+          BUMP
+      - name: Test message timestamps and legacy conversation order
+        shell: bash
+        working-directory: app-source
+        run: |
+          swiftc Sources/App/Models.swift Sources/App/ChatHistoryTiming.swift Tests/MessageTimes/main.swift -o "$RUNNER_TEMP/loki-message-times"
+          "$RUNNER_TEMP/loki-message-times"
+      - name: Test notification routing and inbox
+        shell: bash
+        working-directory: app-source
+        run: |
+          swiftc Sources/App/ChatNotificationInbox.swift Tests/NotificationRouting/main.swift -o "$RUNNER_TEMP/loki-notification-routing"
+          "$RUNNER_TEMP/loki-notification-routing"
+      - name: Test public reasoning and tool display
+        shell: bash
+        working-directory: app-source
+        run: |
+          awk '/^struct ChatItem:/ { exit } { print }' Sources/App/Models.swift > "$RUNNER_TEMP/display-tests.swift"
+          cat >> "$RUNNER_TEMP/display-tests.swift" <<'SWIFT'
+          let prefix = "Activity · Compare the two options."
+          let tool = "Used the music search tool."
+          let stages = "Activity · Received your message.\nWriting the reply."
+          precondition(TurnProgressContent(summary: prefix, activity: tool).summary == prefix)
+          precondition(TurnProgressContent(summary: prefix, activity: tool).activity == tool)
+          precondition(TurnProgressContent(summary: stages).isEmpty)
+          precondition(TurnProgressContent(summary: "Activity · " + tool, activity: tool).summary == nil)
+          precondition(TurnProgressContent(summary: "Activity · " + tool, activity: tool).activity == tool)
+          precondition(TurnProgressContent(summary: "Compare the options.").summary == "Compare the options.")
+          precondition(TurnProgressContent(activity: tool).summary == nil)
+          precondition(TurnProgressContent(activity: tool).activity == tool)
+          print("Public progress and tool display regressions passed")
+          SWIFT
+          swift "$RUNNER_TEMP/display-tests.swift"
+      - name: Verify calibrated pointer math
+        run: |
+          cat app-source/Sources/App/PhonePointerMath.swift app-source/review/tests/pointer-math-check.swift > /tmp/pointer-check.swift
+          swift /tmp/pointer-check.swift
+      - name: Generate project
+        working-directory: app-source
+        run: |
+          command -v xcodegen || brew install xcodegen
+          swift scripts/generate-app-icon.swift
+          xcodegen generate --spec project.yml
+          mkdir -p build
+      - name: Compile complete App for simulator
+        working-directory: app-source
+        run: |
+          xcodebuild -project Loki.xcodeproj -scheme Loki -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath build/Simulator CODE_SIGNING_ALLOWED=NO build > build/simulator.log 2>&1 || { tail -100 build/simulator.log; exit 1; }
+      - name: Compile real iPhone architecture
+        working-directory: app-source
+        run: |
+          xcodebuild -project Loki.xcodeproj -scheme Loki -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/Device CODE_SIGNING_ALLOWED=NO build > build/device.log 2>&1 || { tail -100 build/device.log; exit 1; }
+          python3 scripts/verify-device-build.py build/Device/Build/Products/Debug-iphoneos/Loki.app
+          ditto -c -k --sequesterRsrc --keepParent build/Device/Build/Products/Debug-iphoneos/Loki.app build/Loki-screen-control-unsigned.zip
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: loki-background-inbox-112102
+          path: |
+            app-source/build/simulator.log
+            app-source/build/device.log
+            app-source/build/Loki-screen-control-unsigned.zip
+          retention-days: 1
