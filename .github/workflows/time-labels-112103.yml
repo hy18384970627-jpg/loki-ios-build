@@ -1,0 +1,198 @@
+name: Build Loki time labels 112103
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/time-labels-112103.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: loki-time-labels-112103
+  cancel-in-progress: false
+jobs:
+  app:
+    runs-on: xcode-27
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-iphone-control
+          ref: 8be1a93226edf64a2be9678f429383bc891f3dce
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: d6b09385be43ff8b595f01c0729dad073f83fd82
+          path: verified-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: bdf05059603c369e0f2cceb56890ed1fa2f7d437
+          path: prior-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 3d5400d4edd282c8353fe9ca5f811e64fa35d2a5
+          path: notify-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 555062cda24502d988752cfb072df51bdf0498f4
+          path: time-base-recipe
+          persist-credentials: false
+      - name: Reconstruct verified public build 112102
+        shell: bash
+        run: |
+          echo '042b9a49c87b426bd807b43e6f74270c3815d39af72c49343f8e5dd1a47d08b9  time-base-recipe/.github/workflows/background-inbox-112102.yml' | shasum -a 256 -c -
+          ruby <<'RUBY'
+          require 'yaml'
+          steps = YAML.load_file('time-base-recipe/.github/workflows/background-inbox-112102.yml').fetch('jobs').fetch('app').fetch('steps')
+          ['Reconstruct verified public build 112101','Apply reviewed background inbox changes'].each_with_index do |name, i|
+            matching = steps.select { |s| s['name'] == name }
+            abort('Missing prior step') unless matching.size == 1
+            step = matching.first
+            directory = i == 0 ? '.' : 'app-source'
+            abort('Unexpected path') unless step.fetch('working-directory','.') == directory
+            system('/bin/bash','-e','-o','pipefail','-c',step.fetch('run'), chdir: directory) or abort(name)
+          end
+          RUBY
+      - name: Apply reviewed time labels changes
+        working-directory: app-source
+        shell: bash
+        run: |
+          python3 - <<'SOURCE_BEFORE'
+          from hashlib import sha256
+          from pathlib import Path
+          before={'Sources/App/Models.swift': '4e38f39356562156048ad6a1583b01cc9bd35c016b61eca0954b4909bbf02273', 'Sources/App/ChatView.swift': '89b9fb91c5e7307240f11d84ec1799314a0d77cfba6e59f3177ec5188d199465', 'Tests/MessageTimes/main.swift': '7be662130e9302131ca09bab6d7bee4ff403ceabee0fb1b8564ad7114e5c651d'}
+          for name, expected in before.items():
+              p=Path(name)
+              data=p.read_bytes().replace(b'\r\n', b'\n')
+              assert sha256(data).hexdigest()==expected,name
+              p.write_bytes(data)
+          new_paths=[]
+          for name in new_paths:
+              assert not Path(name).exists(),name
+              Path(name).parent.mkdir(parents=True,exist_ok=True)
+          SOURCE_BEFORE
+          cat > "$RUNNER_TEMP/notification.patch" <<'PUBLIC_DIFF'
+          --- a/Sources/App/Models.swift
+          +++ b/Sources/App/Models.swift
+          @@ -76,14 +76,6 @@
+               enum Source: String, Codable {
+                   case notification, device, generated, pushSubmitted, eventCreated, unknown
+                   var isDevice: Bool { self == .notification || self == .device }
+          -        var displayLabel: String? {
+          -            switch self {
+          -            case .generated: return "生成"
+          -            case .pushSubmitted: return "推送提交"
+          -            case .eventCreated: return "事件"
+          -            default: return nil
+          -            }
+          -        }
+               }
+               let date: Date
+               let source: Source
+          --- a/Sources/App/ChatView.swift
+          +++ b/Sources/App/ChatView.swift
+          @@ -455,10 +455,7 @@
+                           if beginsGroup {
+                               HStack(spacing: 6) {
+                                   if !outgoing { Text("Loki").foregroundStyle(LokiDesign.gold) }
+          -                        if message.timeSource == .unknown {
+          -                            Text("时间未记录").foregroundStyle(LokiDesign.muted)
+          -                        } else {
+          -                            if let label = message.timeSource?.displayLabel { Text(label).foregroundStyle(LokiDesign.muted) }
+          +                        if message.timeSource != .unknown {
+                                       Text(message.date, style: .time).foregroundStyle(LokiDesign.muted)
+                                   }
+                               }.font(.caption2.monospacedDigit())
+          --- a/Tests/MessageTimes/main.swift
+          +++ b/Tests/MessageTimes/main.swift
+          @@ -14,7 +14,7 @@
+           precondition(ChatMessageTime.preferred(received, generated)?.date == later)
+           precondition(ChatMessageTime.preferred(received, .init(date: early, source: .device))?.date == early)
+           precondition(ChatMessageTime.server(0, source: "generated") == nil)
+          -precondition(ChatMessageTime.server(100, source: "event_created")?.source.displayLabel == "事件")
+          +precondition(ChatMessageTime.server(100, source: "event_created")?.source == .eventCreated)
+           
+           var first = ChatItem(role: "assistant", text: "One.", speechText: "One.")
+           first.careEventID = "event"
+          PUBLIC_DIFF
+          patch --batch -p1 < "$RUNNER_TEMP/notification.patch"
+          shasum -a 256 -c <<'SOURCE_AFTER'
+          04d3314a228ef0f5f395fc4cff40f4261a1f1a77f7c412368b6d33f65fcb7819  Sources/App/Models.swift
+          e3a1cc9221d1870dc990bf59d88de1cee27fe7886682941c965435981bd37c3a  Sources/App/ChatView.swift
+          a36a75ec629096bcfc87b9fdadc691ee26e5bca4497bc8e936796b342d3ec93b  Tests/MessageTimes/main.swift
+          SOURCE_AFTER
+          python3 - <<'BUMP'
+          from pathlib import Path
+          p=Path('project.yml')
+          s=p.read_text()
+          assert '112102' in s and '112103' not in s
+          p.write_text(s.replace('112102','112103'))
+          BUMP
+      - name: Test message timestamps and legacy conversation order
+        shell: bash
+        working-directory: app-source
+        run: |
+          swiftc Sources/App/Models.swift Sources/App/ChatHistoryTiming.swift Tests/MessageTimes/main.swift -o "$RUNNER_TEMP/loki-message-times"
+          "$RUNNER_TEMP/loki-message-times"
+      - name: Test notification routing and inbox
+        shell: bash
+        working-directory: app-source
+        run: |
+          swiftc Sources/App/ChatNotificationInbox.swift Tests/NotificationRouting/main.swift -o "$RUNNER_TEMP/loki-notification-routing"
+          "$RUNNER_TEMP/loki-notification-routing"
+      - name: Test public reasoning and tool display
+        shell: bash
+        working-directory: app-source
+        run: |
+          awk '/^struct ChatItem:/ { exit } { print }' Sources/App/Models.swift > "$RUNNER_TEMP/display-tests.swift"
+          cat >> "$RUNNER_TEMP/display-tests.swift" <<'SWIFT'
+          let prefix = "Activity · Compare the two options."
+          let tool = "Used the music search tool."
+          let stages = "Activity · Received your message.\nWriting the reply."
+          precondition(TurnProgressContent(summary: prefix, activity: tool).summary == prefix)
+          precondition(TurnProgressContent(summary: prefix, activity: tool).activity == tool)
+          precondition(TurnProgressContent(summary: stages).isEmpty)
+          precondition(TurnProgressContent(summary: "Activity · " + tool, activity: tool).summary == nil)
+          precondition(TurnProgressContent(summary: "Activity · " + tool, activity: tool).activity == tool)
+          precondition(TurnProgressContent(summary: "Compare the options.").summary == "Compare the options.")
+          precondition(TurnProgressContent(activity: tool).summary == nil)
+          precondition(TurnProgressContent(activity: tool).activity == tool)
+          print("Public progress and tool display regressions passed")
+          SWIFT
+          swift "$RUNNER_TEMP/display-tests.swift"
+      - name: Verify calibrated pointer math
+        run: |
+          cat app-source/Sources/App/PhonePointerMath.swift app-source/review/tests/pointer-math-check.swift > /tmp/pointer-check.swift
+          swift /tmp/pointer-check.swift
+      - name: Generate project
+        working-directory: app-source
+        run: |
+          command -v xcodegen || brew install xcodegen
+          swift scripts/generate-app-icon.swift
+          xcodegen generate --spec project.yml
+          mkdir -p build
+      - name: Compile complete App for simulator
+        working-directory: app-source
+        run: |
+          xcodebuild -project Loki.xcodeproj -scheme Loki -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath build/Simulator CODE_SIGNING_ALLOWED=NO build > build/simulator.log 2>&1 || { tail -100 build/simulator.log; exit 1; }
+      - name: Compile real iPhone architecture
+        working-directory: app-source
+        run: |
+          xcodebuild -project Loki.xcodeproj -scheme Loki -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/Device CODE_SIGNING_ALLOWED=NO build > build/device.log 2>&1 || { tail -100 build/device.log; exit 1; }
+          python3 scripts/verify-device-build.py build/Device/Build/Products/Debug-iphoneos/Loki.app
+          ditto -c -k --sequesterRsrc --keepParent build/Device/Build/Products/Debug-iphoneos/Loki.app build/Loki-screen-control-unsigned.zip
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: loki-time-labels-112103
+          path: |
+            app-source/build/simulator.log
+            app-source/build/device.log
+            app-source/build/Loki-screen-control-unsigned.zip
+          retention-days: 1
