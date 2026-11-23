@@ -86,6 +86,36 @@ jobs:
             system('/bin/bash', '-e', '-o', 'pipefail', '-c', step.fetch('run'), chdir: step.fetch('working-directory','.')) or abort("Failed to restore #{name}")
           end
           RESTORE
+      - name: Instrument the simulator main run loop only
+        working-directory: app-source
+        shell: bash
+        run: |
+          cat > Sources/App/SimulatorRuntimeProof.m <<'CHECKPID'
+          #import <UIKit/UIKit.h>
+          #import <stdlib.h>
+          #import <unistd.h>
+          #import <TargetConditionals.h>
+          #if TARGET_OS_SIMULATOR
+          static dispatch_source_t LokiSmokeTimer;
+          __attribute__((constructor)) static void LokiInstallSimulatorHeartbeat(void) {
+              if (getenv("LOKI_HEALTH_STARTUP_SMOKE") == NULL) { return; }
+              dispatch_async(dispatch_get_main_queue(), ^{
+                  NSTimeInterval start = [NSDate date].timeIntervalSince1970;
+                  NSTimeInterval origin = NSProcessInfo.processInfo.systemUptime;
+                  NSURL *file = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:@"loki-simulator-process.json"]];
+                  LokiSmokeTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+                  dispatch_source_set_timer(LokiSmokeTimer, DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC, 200 * NSEC_PER_MSEC);
+                  dispatch_source_set_event_handler(LokiSmokeTimer, ^{
+                      BOOL active = UIApplication.sharedApplication.applicationState == UIApplicationStateActive;
+                      NSDictionary *status = @{@"pid": @(getpid()), @"name": NSProcessInfo.processInfo.processName, @"bundle": NSBundle.mainBundle.bundleIdentifier, @"wall_start": @(start), @"wall_tick": @([NSDate date].timeIntervalSince1970), @"elapsed": @(NSProcessInfo.processInfo.systemUptime - origin), @"active": @(active)};
+                      [[NSJSONSerialization dataWithJSONObject:status options:0 error:nil] writeToURL:file options:NSDataWritingAtomic error:nil];
+                  });
+                  dispatch_resume(LokiSmokeTimer);
+              });
+          }
+          #endif
+          CHECKPID
+          xcodegen generate --spec project.yml
       - name: Compile complete App for simulator
         working-directory: app-source
         shell: bash
@@ -209,54 +239,49 @@ jobs:
               auth_file=data/'tmp/loki-health-auth-ready.json'
               auth_file.unlink(missing_ok=True)
               opts = {'env': {**os.environ, 'SIMCTL_CHILD_LOKI_HEALTH_STARTUP_SMOKE':'1'}}
+              heartbeat=data/'tmp/loki-simulator-process.json'
+              heartbeat.unlink(missing_ok=True)
               proc=subprocess.Popen(['xcrun','simctl','launch',udid,bid],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,**opts)
-              # simctl prints the launched PID. Direct libproc calls avoid spawning 'ps' repeatedly
-              # on a busy hosted macOS runner and give the executable path for this exact PID.
-              import ctypes
-              lib = ctypes.CDLL('/usr/lib/libproc.dylib')
-              def path_for_pid(n):
-                  buf=ctypes.create_string_buffer(4096)
-                  return os.fsdecode(buf.value) if lib.proc_pidpath(n,buf,len(buf))>0 else ''
-              def match(n):
-                  result=path_for_pid(n)
-                  return bool(result and Path(result).resolve()==(bundle/executable).resolve())
-              def lookup():
-                  count=lib.proc_listallpids(None,0)
-                  if count<1:return None
-                  pids=(ctypes.c_int*(count+256))()
-                  n=lib.proc_listallpids(pids,ctypes.sizeof(pids))
-                  for i in range(min(n,len(pids))):
-                      if pids[i]>0 and match(pids[i]):return pids[i]
-                  return None
-              deadline=time.monotonic()+300
+              deadline=time.monotonic()+420
               pid=None
+              returned_pid=None
+              last_tick=None
+              output=''
               try:
                   while time.monotonic()<deadline:
-                      if proc.poll() is not None:
+                      if proc.poll() is not None and returned_pid is None:
                           output=proc.stdout.read()
                           found=re.search(re.escape(bid)+r':\s*(\d+)',output)
                           if proc.returncode or not found:raise RuntimeError('App launch rejected: '+output[-650:])
-                          pid=int(found.group(1))
-                          break
-                      found=lookup()
-                      if found:pid=found;break
-                      time.sleep(3)
-                  if not pid:raise RuntimeError('The simulator never launched the verified app executable')
-                  print('Runtime launched', label,flush=True)
-                  # Leave the simctl IPC client running while the target establishes its services.
-                  held=time.monotonic()
-                  auth_file=data/'tmp/loki-health-auth-ready.json'
-                  while time.monotonic()-held<25 or (verify_marker and not auth_file.is_file() and time.monotonic()-held<130):
-                      if not match(pid):
-                          time.sleep(3)
-                          names=[p.name for p in crash_reports(started)]
-                          raise RuntimeError(f'{label}: original app process exited; crash reports: {names}')
-                      time.sleep(1)
+                          returned_pid=int(found.group(1))
+                      if heartbeat.exists():
+                          h=json.loads(heartbeat.read_bytes())
+                          assert h['name']==executable and h['bundle']==bid and h['wall_start']>=int(started)
+                          if pid is not None:assert int(h['pid'])==pid,'Launcher restarted app during cold launch'
+                          pid=int(h['pid'])
+                          if returned_pid is not None:assert returned_pid==pid, 'Launched PID did not match the simulator app'
+                          if last_tick is None:
+                              print('Simulator app itself confirmed run loop and PID',pid,label,flush=True)
+                          last_tick=h
+                          if returned_pid and h['elapsed']>=25 and bool(h['active']) and time.time()-h['wall_tick']<20 and (not verify_marker or auth_file.exists()):
+                              break
+                      if last_tick and time.time()-last_tick['wall_tick']>70:break
+                      time.sleep(2)
+                  else:print('App evidence reached observation deadline',flush=True)
+                  if not last_tick or not returned_pid or last_tick['elapsed']<25 or not last_tick['active'] or time.time()-last_tick['wall_tick']>=20:
+                      names=[p.name for p in crash_reports(started)]
+                      print('Verification state:',label,'launch_pid',returned_pid,'marker',last_tick,'crash reports',names,flush=True)
+                      try:
+                          diag=sim('spawn',udid,'log','show','--last','4m','--style','compact','--predicate',
+                                   f'(process == "{executable}" AND (messageType == error OR messageType == fault)) OR (eventMessage CONTAINS "{bid}" AND (eventMessage CONTAINS[c] "terminate" OR eventMessage CONTAINS[c] "exit"))',timeout=90)
+                          Path('build/runtime-diagnostics-'+('upgrade' if verify_marker else 'fresh')+'.txt').write_text(diag[-35000:])
+                      except Exception as exc: print('Simulator diagnostic logging',type(exc).__name__,flush=True)
+                      raise RuntimeError('Could not prove same active app PID for 25 seconds')
               finally:
                   if proc.poll() is None: proc.terminate()
               reports = crash_reports(started)
               if reports: raise RuntimeError(f'{label}: simulator produced a crash report')
-              result = dict(scenario=label, same_pid_alive_seconds=24, new_app_crash_reports=0)
+              result = dict(scenario=label, same_pid_alive_seconds=round(last_tick["elapsed"]), new_app_crash_reports=0, active_app_confirmed=True, runtime_pid_matches_launcher=True)
               if verify_marker:
                   assert marker.is_file(), 'Healthy PID did not finish the real observer registration path'
                   mark = json.loads(marker.read_text())
@@ -287,7 +312,8 @@ jobs:
               print('Cold launch verified:',label,flush=True)
               return result
           try:
-              evidence['checks'].append(check('fresh install'))
+              try: evidence['checks'].append(check('fresh install'))
+              except Exception as exc: evidence['checks'].append(dict(scenario='fresh install',failure=str(exc))); print('Fresh check:',exc,flush=True)
               save()
               sim('shutdown',udid,timeout=150)
               # Seed the persistent domain while cfprefsd is stopped, exactly as an upgrade retains these switches.
@@ -297,9 +323,11 @@ jobs:
               preferences.write_bytes(plistlib.dumps(prefs,fmt=plistlib.FMT_BINARY))
               assert all(plistlib.loads(preferences.read_bytes()).get(k) is True for k in ('healthAutoSync','healthBackground','validateArchiveQueryConstructors','validateHealthReadAuthorization'))
               sim('bootstatus',udid,'-b',timeout=360)
-              evidence['checks'].append(check('upgrade with health syncing and background enabled', True))
+              try: evidence['checks'].append(check('upgrade with health syncing and background enabled', True))
+              except Exception as exc: evidence['checks'].append(dict(scenario='upgrade',failure=str(exc))); print('Upgrade check:',exc,flush=True)
               save()
               print(json.dumps(evidence),flush=True)
+              assert all('failure' not in c for c in evidence['checks']), 'A simulator scenario failed verification'
           finally:
               save()
           STARTUP_SMOKE
@@ -311,5 +339,6 @@ jobs:
           path: |
             app-source/build/simulator.log
             app-source/build/startup-smoke.json
+            app-source/build/runtime-diagnostics-*.txt
           if-no-files-found: warn
           retention-days: 2
