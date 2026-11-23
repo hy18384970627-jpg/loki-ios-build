@@ -77,13 +77,14 @@ jobs:
           cat > "$RUNNER_TEMP/notification.patch" <<'REVIEWED_CHUNK'
           --- a/Sources/App/HealthService.swift
           +++ b/Sources/App/HealthService.swift
-          @@ -25,55 +25,101 @@
+          @@ -25,55 +25,115 @@
                @Published var busy = false
                @Published var sleepDetails: SleepDetails?
                @Published var sleepTrend: [HealthDay] = []
           -    var recentSleep: [[String: Any]] = []
           +    var recentSleep: [SleepNight] = []
                @Published var syncMessage = "尚未启用自动同步"
+          +    @Published var accessNote = ""
                @Published var lastSyncedAt = UserDefaults.standard.object(forKey: "healthLastSync") as? Date
                let store = HKHealthStore()
           +    lazy var inventory = NativeHealthInventory(store: store)
@@ -96,6 +97,7 @@ jobs:
           +    private var refreshTask: Task<Void, Never>?
           +    private var observedChanges = 0
           +    private var reviewingAccess = false
+          +    private(set) var completedHealthRead = false
           +    var sharingChoice: Bool? {
           +        guard let id = Bundle.main.bundleIdentifier else { return nil }
           +        return UserDefaults.standard.persistentDomain(forName: id)?["healthAutoSync"] as? Bool
@@ -111,15 +113,26 @@ jobs:
                func authorize() async throws {
                    guard HKHealthStore.isHealthDataAvailable() else { throw LokiError.message("这台设备没有可用的健康数据服务。") }
           -        try await store.requestAuthorization(toShare: [], read: types)
-          +        try await store.requestAuthorization(toShare: [], read: types.union(inventory.regularReadTypes))
+          +        do {
+          +            try await store.requestAuthorization(toShare: [], read: types.union(inventory.regularReadTypes))
+          +            UserDefaults.standard.set(true, forKey: "healthInventoryAccessReviewedV1")
+          +            accessNote = ""
+          +        } catch {
+          +            // An unsupported optional HealthKit type must not block sleep, HRV, steps and overnight vitals.
+          +            let broadFailure = error.localizedDescription
+          +            try await store.requestAuthorization(toShare: [], read: types)
+          +            UserDefaults.standard.set(Date(), forKey: "healthInventoryAccessRetryDate")
+          +            accessNote = "基础指标的授权已处理。更多项目可点「查看 Apple 健康读取权限」重试。\(broadFailure)"
+          +        }
           +        inventory.resetAfterReview()
-          +        UserDefaults.standard.set(true, forKey: "healthInventoryAccessReviewedV1")
           +        sleepCacheUpdatedAt = nil
                    await refresh()
                }
           +    func reviewSharingOnForeground() async {
           +        guard !reviewingAccess, sharingChoice != false, HKHealthStore.isHealthDataAvailable() else { return }
           +        if sharingChoice == true && UserDefaults.standard.bool(forKey: "healthInventoryAccessReviewedV1") { return }
+          +        if let last = UserDefaults.standard.object(forKey: "healthInventoryAccessRetryDate") as? Date,
+          +           Date().timeIntervalSince(last) < 6 * 3600 { return }
           +        reviewingAccess = true
           +        defer { reviewingAccess = false }
           +        do {
@@ -193,13 +206,14 @@ jobs:
           -        } catch { message = error.localizedDescription }
           +        } catch { failures.append(error.localizedDescription) }
           +        if results.isEmpty, let error = failures.first { message = error; return }
+          +        completedHealthRead = true
           +        readings = results
           +        message = results.isEmpty ? "没有可读取的数据。可能尚未授权、未采集或未同步；空结果不能区分原因。" : "显示原始采样时间；旧数据不会当作当前状态。HRV 不用于诊断。"
           +        if UserDefaults.standard.bool(forKey: "healthAutoSync") { queueSnapshot(enabled: true) }
                }
                private func samples(_ type: HKSampleType) async throws -> [HKSample] {
                    try await withCheckedThrowingContinuation { continuation in
-          @@ -102,27 +148,29 @@
+          @@ -102,27 +162,29 @@
                    return count.map { ($0, latest.endDate) }
                }
                func background(_ enabled: Bool) async throws {
@@ -241,7 +255,7 @@ jobs:
                }
                private func installObservers() {
                    guard observers.isEmpty else { return }
-          @@ -130,9 +178,16 @@
+          @@ -130,9 +192,16 @@
                        let query = HKObserverQuery(sampleType: type, predicate: nil) { [weak self] _, completion, error in
                            guard error == nil else { completion(); return }
                            Task { @MainActor [weak self] in
@@ -293,7 +307,7 @@ jobs:
                    return value
                }
                var contentData: Data? {
-          @@ -33,18 +47,23 @@
+          @@ -33,18 +47,25 @@
            extension HealthService {
                var snapshotForChat: [String: Any] {
                    let enabled = UserDefaults.standard.bool(forKey: "healthAutoSync")
@@ -302,6 +316,7 @@ jobs:
           -        if enabled { value["recent_sleep"] = recentSleep }
           +        var value = makeSnapshot(enabled: enabled).payload
           +        value["sharing_configured"] = sharingChoice != nil
+          +        if enabled && !completedHealthRead && readings.isEmpty { value["read_pending"] = true }
                    return value
                }
           +    private func makeSnapshot(enabled: Bool) -> NativeHealthSnapshot {
@@ -313,6 +328,12 @@ jobs:
                func queueSnapshot(enabled: Bool) {
           -        pendingSnapshot = .init(enabled: enabled, collectedAt: Date(), readings: enabled ? readings : [],
           -            sleepDetails: enabled ? sleepDetails : nil)
+          +        guard !enabled || completedHealthRead else { return }
+          REVIEWED_CHUNK
+      - name: Stage reviewed Swift changes 2
+        shell: bash
+        run: |
+          cat >> "$RUNNER_TEMP/notification.patch" <<'REVIEWED_CHUNK'
           +        pendingSnapshot = makeSnapshot(enabled: enabled)
                    try? PrivateFiles.save(pendingSnapshot, "health-pending.json")
                }
@@ -322,7 +343,7 @@ jobs:
                    UserDefaults.standard.set(enabled, forKey: "healthAutoSync")
                    queueSnapshot(enabled: enabled)
                    if enabled {
-          @@ -57,19 +76,21 @@
+          @@ -57,19 +78,21 @@
                    if UserDefaults.standard.bool(forKey: "healthAutoSync") { await refresh(upload: false) }
                }
                func syncPending() async {
@@ -333,11 +354,6 @@ jobs:
                        syncMessage = "等手机配对并解锁后自动同步"; return
                    }
                    let encoded = snapshot.contentData
-          REVIEWED_CHUNK
-      - name: Stage reviewed Swift changes 2
-        shell: bash
-        run: |
-          cat >> "$RUNNER_TEMP/notification.patch" <<'REVIEWED_CHUNK'
                    if snapshot.enabled && encoded == lastSyncedSamples {
           -            pendingSnapshot = nil; try? PrivateFiles.save(pendingSnapshot, "health-pending.json"); return
           +            pendingSnapshot = nil; try? PrivateFiles.save(pendingSnapshot, "health-pending.json"); inventory.schedule(); return
@@ -351,7 +367,7 @@ jobs:
                        lastSyncedSamples = snapshot.enabled ? encoded : nil
                        lastSyncedAt = Date(); UserDefaults.standard.set(lastSyncedAt, forKey: "healthLastSync")
                        syncMessage = snapshot.enabled ? "已自动同步给 Loki；使用原始采样时间" : "已暂停向 Loki 分享健康数据"
-          @@ -77,6 +98,7 @@
+          @@ -77,6 +100,7 @@
                            pendingSnapshot = nil; try? PrivateFiles.save(pendingSnapshot, "health-pending.json")
                        } else { Task { await syncPending() } }
                    } catch {
@@ -359,7 +375,7 @@ jobs:
                        syncMessage = "等待下次联网同步：\(error.localizedDescription)"
                    }
                }
-          @@ -96,32 +118,37 @@
+          @@ -96,32 +120,37 @@
                        HKCategoryValueSleepAnalysis.asleepCore.rawValue, HKCategoryValueSleepAnalysis.asleepDeep.rawValue,
                        HKCategoryValueSleepAnalysis.asleepREM.rawValue]
                    let all = raw.filter { asleep.contains($0.value) && $0.endDate > $0.startDate }
@@ -409,7 +425,7 @@ jobs:
                    let names = [HKCategoryValueSleepAnalysis.asleepDeep.rawValue: "deep", HKCategoryValueSleepAnalysis.asleepCore.rawValue: "core",
                        HKCategoryValueSleepAnalysis.asleepREM.rawValue: "rem", HKCategoryValueSleepAnalysis.awake.rawValue: "awake",
                        HKCategoryValueSleepAnalysis.asleepUnspecified.rawValue: "unspecified"]
-          @@ -129,10 +156,42 @@
+          @@ -129,10 +158,42 @@
                        guard let stage = names[sample.value], sample.endDate > sample.startDate else { return nil }
                        return .init(stage: stage, startAt: sample.startDate, endAt: sample.endDate)
                    }
@@ -532,6 +548,11 @@ jobs:
           +++ b/Sources/App/AppState.swift
           @@ -783,6 +783,7 @@
                            return (defaults.object(forKey: "hrvCompanionEnabled") as? Bool ?? true) && defaults.bool(forKey: "healthAutoSync")
+          REVIEWED_CHUNK
+      - name: Stage reviewed Swift changes 3
+        shell: bash
+        run: |
+          cat >> "$RUNNER_TEMP/notification.patch" <<'REVIEWED_CHUNK'
                        }
                        if id.hasPrefix("weather:") { return defaults.bool(forKey: "weatherCompanionEnabled") }
           +            if id.hasPrefix("sleep:") { return defaults.bool(forKey: "healthAutoSync") }
@@ -554,11 +575,6 @@ jobs:
                            if value != .active { app.leftForeground() }
                            if value == .active {
                                app.restoreProtectedChat()
-          REVIEWED_CHUNK
-      - name: Stage reviewed Swift changes 3
-        shell: bash
-        run: |
-          cat >> "$RUNNER_TEMP/notification.patch" <<'REVIEWED_CHUNK'
           -                    LocationService.shared.restoreAutomatic()
           +                    LocationService.shared.resumeSharing()
                                focus.refresh(); alarms.refresh()
@@ -583,7 +599,7 @@ jobs:
                        .onChange(of: voice.recording || call.active) { _, value in CompanionInteraction.shared.setRecording(value) }
           --- a/Sources/App/HealthView.swift
           +++ b/Sources/App/HealthView.swift
-          @@ -251,10 +251,17 @@
+          @@ -251,10 +251,21 @@
                var body: some View {
                    Form {
                        Section("Apple 健康") {
@@ -592,8 +608,12 @@ jobs:
                                Task { do { try await health.authorize() } catch { app.tell(error) } }
                            }.disabled(health.busy)
                            Text(health.message).font(.caption).foregroundStyle(.secondary)
-          +                Button("选择可分享的药物与单项记录") {
-          +                    Task { do { try await health.inventory.requestSelections() } catch { app.tell(error) } }
+          +                if !health.accessNote.isEmpty { Text(health.accessNote).font(.caption).foregroundStyle(.secondary) }
+          +                Button("选择可分享的用药记录") {
+          +                    Task { do { try await health.inventory.requestSelections(medications: true) } catch { app.tell(error) } }
+          +                }
+          +                Button("选择可分享的视力处方") {
+          +                    Task { do { try await health.inventory.requestSelections(medications: false) } catch { app.tell(error) } }
           +                }
           +                Button("授权临床健康记录") {
           +                    Task { do { try await health.inventory.requestClinical() } catch { app.tell(error) } }
@@ -602,7 +622,7 @@ jobs:
                        }
                        Section("更新与分享") {
                            Toggle("自动同步已授权的数据给 Loki", isOn: Binding(get: { autoSync }, set: { value in
-          @@ -266,6 +273,7 @@
+          @@ -266,6 +277,7 @@
                            Text("后台更新由系统与手表同步决定。页面保留实际采样时间。")
                                .font(.caption).foregroundStyle(.secondary)
                            Text(health.syncMessage).font(.caption).foregroundStyle(.secondary)
@@ -610,7 +630,7 @@ jobs:
                            if let synced = health.lastSyncedAt { Text("最近同步：\(synced.formatted())").font(.caption) }
                            Button("现在刷新并同步") { Task { await health.refresh(); await health.syncPending() } }
                                .disabled(health.busy || !autoSync || !app.paired)
-          @@ -282,3 +290,16 @@
+          @@ -282,3 +294,16 @@
                    .navigationTitle("数据与分享")
                }
            }
@@ -776,6 +796,11 @@ jobs:
           +func at(_ hour: Double) -> Date { day.addingTimeInterval(hour * 3600) }
           +func interval(_ a: Double, _ b: Double) -> SleepIntervals.Interval { .init(start: at(a), end: at(b)) }
           +func stage(_ kind: String, _ a: Double, _ b: Double) -> SleepStagePeriod {
+          REVIEWED_CHUNK
+      - name: Stage reviewed Swift changes 4
+        shell: bash
+        run: |
+          cat >> "$RUNNER_TEMP/notification.patch" <<'REVIEWED_CHUNK'
           +    .init(stage: kind, startAt: at(a), endAt: at(b))
           +}
           +
@@ -798,11 +823,6 @@ jobs:
           +precondition(!details.includesAsleepSample(from: at(0.4), to: at(0.8)))
           +precondition(!details.includesAsleepSample(from: at(1.25), to: at(1.25)))
           +precondition(details.includesAsleepSample(from: at(0.75), to: at(0.75)))
-          REVIEWED_CHUNK
-      - name: Stage reviewed Swift changes 4
-        shell: bash
-        run: |
-          cat >> "$RUNNER_TEMP/notification.patch" <<'REVIEWED_CHUNK'
           +precondition(details.overlapsNightlyTemperature(from: at(-1.1), to: at(1.5)))
           +precondition(!details.overlapsNightlyTemperature(from: at(-25), to: at(-0.99)))
           +precondition(SleepVital([], unit: "bpm") == nil)
@@ -977,29 +997,13 @@ jobs:
           +}
           --- /dev/null
           +++ b/Sources/App/HealthArchiveSeries.swift
-          @@ -0,0 +1,152 @@
+          @@ -0,0 +1,133 @@
           +import Foundation
           +import HealthKit
           +import CoreLocation
           +import CryptoKit
           +
-          +/// Indices identify immutable HealthKit sample contents across interrupted uploads.
-          +enum HealthArchiveParts {
-          +    static func id(parent: UUID, series: String, index: Int) -> String {
-          +        let seed = "\(parent.uuidString.lowercased())/\(series)/\(index)"
-          +        var bytes = Array(SHA256.hash(data: Data(seed.utf8)).prefix(16))
-          +        bytes[6] = (bytes[6] & 0x0f) | 0x80
-          +        bytes[8] = (bytes[8] & 0x3f) | 0x80
-          +        let hex = bytes.map { String(format: "%02x", $0) }.joined()
-          +        let lengths = [8, 4, 4, 4, 12]
-          +        var cursor = hex.startIndex
-          +        return lengths.map { length in
-          +            let end = hex.index(cursor, offsetBy: length)
-          +            defer { cursor = end }
-          +            return String(hex[cursor..<end])
-          +        }.joined(separator: "-")
-          +    }
-          +
+          +extension HealthArchiveParts {
           +    @MainActor
           +    static func child(_ sample: HKSample, series: String, index: Int, details: [String: Any]) -> [String: Any] {
           +        var row = NativeHealthInventory.baseRecord(sample)
@@ -1025,6 +1029,11 @@ jobs:
           +        var page = 0
           +        for try await point in series {
           +            try Task.checkCancellation()
+          REVIEWED_CHUNK
+      - name: Stage reviewed Swift changes 5
+        shell: bash
+        run: |
+          cat >> "$RUNNER_TEMP/notification.patch" <<'REVIEWED_CHUNK'
           +            points.append(map(point))
           +            count += 1
           +            if points.count == pointsPerPage {
@@ -1036,11 +1045,6 @@ jobs:
           +        }
           +        try Task.checkCancellation()
           +        if !points.isEmpty {
-          REVIEWED_CHUNK
-      - name: Stage reviewed Swift changes 5
-        shell: bash
-        run: |
-          cat >> "$RUNNER_TEMP/notification.patch" <<'REVIEWED_CHUNK'
           +            try await emit([HealthArchiveParts.child(sample, series: name, index: page,
           +                                                   details: ["columns": columns, "points": points])])
           +        }
@@ -1121,17 +1125,14 @@ jobs:
           +                details["unit"] = quantity["unit"] as? String
           +            }
           +        }
-          +        let chunk = 7200
-          +        var index = 0
-          +        for start in stride(from: 0, to: data.count, by: chunk) {
+          +        let ranges = HealthArchiveParts.blockRanges(for: data.count)
+          +        for (index, range) in ranges.enumerated() {
           +            try Task.checkCancellation()
-          +            let end = min(start + chunk, data.count)
           +            try await emit([HealthArchiveParts.child(sample, series: "fhir", index: index,
-          +                                                    details: ["encoding": "base64", "offset": start,
-          +                                                              "data": data.subdata(in: start..<end).base64EncodedString()])])
-          +            index += 1
+          +                                                    details: ["encoding": "base64", "offset": range.lowerBound,
+          +                                                              "data": data.subdata(in: range).base64EncodedString()])])
           +        }
-          +        details["parts"] = index
+          +        details["parts"] = ranges.count
           +        return ["kind": "clinical", "details": details]
           +    }
           +}
@@ -1277,6 +1278,11 @@ jobs:
           +        HKObjectType.correlationType(forIdentifier: $0)
           +    }
           +    static let ordinary: [HKSampleType] = {
+          REVIEWED_CHUNK
+      - name: Stage reviewed Swift changes 6
+        shell: bash
+        run: |
+          cat >> "$RUNNER_TEMP/notification.patch" <<'REVIEWED_CHUNK'
           +        let quantities: [HKSampleType] = quantityUnits.keys.compactMap {
           +            HKObjectType.quantityType(forIdentifier: .init(rawValue: $0))
           +        }
@@ -1285,11 +1291,6 @@ jobs:
           +        }
           +        return quantities + categories
           +    }()
-          REVIEWED_CHUNK
-      - name: Stage reviewed Swift changes 6
-        shell: bash
-        run: |
-          cat >> "$RUNNER_TEMP/notification.patch" <<'REVIEWED_CHUNK'
           +    static func characteristic(_ type: HKCharacteristicType, store: HKHealthStore) throws -> Any? {
           +        let value: Int
           +        switch type.identifier {
@@ -1348,7 +1349,7 @@ jobs:
           +}
           --- /dev/null
           +++ b/Sources/App/NativeHealthInventory.swift
-          @@ -0,0 +1,495 @@
+          @@ -0,0 +1,569 @@
           +import Foundation
           +import HealthKit
           +import CryptoKit
@@ -1398,7 +1399,7 @@ jobs:
           +    var regularReadTypes: Set<HKObjectType> {
           +        var result = Set(HealthArchiveCatalog.ordinary.map { $0 as HKObjectType })
           +        result.formUnion(HealthArchiveCatalog.characteristics.map { $0 as HKObjectType })
-          +        result.formUnion(HealthArchiveSpecial.sampleTypes.filter { !$0.requiresPerObjectAuthorization() }.map { $0 as HKObjectType })
+          +        result.formUnion(HealthArchiveSpecial.sampleTypes.filter { !$0.requiresPerObjectAuthorization() && $0 != HKObjectType.medicationDoseEventType() }.map { $0 as HKObjectType })
           +        result.insert(HKObjectType.activitySummaryType())
           +        return result
           +    }
@@ -1412,28 +1413,27 @@ jobs:
           +        Dictionary(uniqueKeysWithValues: sampleTypes.map { ($0.identifier, $0) })
           +    }
           +    func requestClinical() async throws {
-          +        let types = Set(HealthArchiveSpecial.clinicalTypes.map { $0 as HKObjectType })
+          +        var types = Set(HealthArchiveSpecial.clinicalTypes.map { $0 as HKObjectType })
+          +        if let document = HealthArchiveDocuments.type { types.insert(document) }
           +        guard HKHealthStore.isHealthDataAvailable(), !types.isEmpty else { throw LokiError.message("当前设备不提供临床健康记录。") }
           +        try await store.requestAuthorization(toShare: [], read: types)
           +        UserDefaults.standard.set(true, forKey: "healthArchiveClinical")
           +        resetAfterReview()
           +    }
-          +    func requestSelections() async throws {
-          +        let medication = HKObjectType.userAnnotatedMedicationType()
-          +        var types: [HKObjectType] = HealthArchiveSpecial.sampleTypes.filter { $0.requiresPerObjectAuthorization() }
-          +        if !types.contains(medication) { types.append(medication) }
-          +        for type in types {
-          +            if type.requiresPerObjectAuthorization() {
-          +                try await store.requestPerObjectReadAuthorization(for: type, predicate: nil)
-          +            } else { try await store.requestAuthorization(toShare: [], read: [type]) }
-          +        }
-          +        UserDefaults.standard.set(true, forKey: "healthArchiveIndividual")
+          +    func requestSelections(medications: Bool) async throws {
+          +        let type: HKObjectType = medications ? HKObjectType.userAnnotatedMedicationType() : HKObjectType.visionPrescriptionType()
+          +        try await store.requestPerObjectReadAuthorization(for: type, predicate: nil)
+          +        UserDefaults.standard.set(true, forKey: medications ? "healthArchiveIndividual" : "healthArchiveVision")
           +        resetAfterReview()
           +    }
           +    func resetAfterReview() {
           +        cancel()
-          +        state = nil
-          +        try? PrivateFiles.save(Optional<HealthArchiveSchedule>.none, file)
+          +        if state == nil { state = PrivateFiles.load(file, fallback: nil) }
+          +        // Newly granted dates/samples must be discoverable with a fresh anchor. Retain the
+          +        // IDs of earlier selections so removed medications, documents and prescriptions can be removed remotely.
+          +        state?.anchors = [:]; state?.queued = []; state?.lastReconciliation = nil
+          +        lastSync = .distantPast; retryAfter = [:]
+          +        try? persist()
           +        if UserDefaults.standard.bool(forKey: "healthBackground") { installObserver() }
           +        schedule(force: true)
           +    }
@@ -1461,7 +1461,7 @@ jobs:
           +        observerTypes = []
           +    }
           +    func installObserver() {
-          +        guard ready else { return }
+          +        guard UserDefaults.standard.bool(forKey: "healthAutoSync") else { return }
           +        let types = sampleTypes
           +        let ids = Set(types.map(\.identifier))
           +        guard ids != observerTypes else { return }
@@ -1489,7 +1489,7 @@ jobs:
           +        registration = Task { [weak self] in
           +            guard let self else { return }
           +            for type in types {
-          +                guard !Task.isCancelled, self.ready else { return }
+          +                guard !Task.isCancelled, UserDefaults.standard.bool(forKey: "healthAutoSync") else { return }
           +                // The summary service registers its six time-sensitive types at immediate frequency.
           +                let summaryIDs: Set<String> = [HKQuantityTypeIdentifier.heartRate.rawValue,
           +                    HKQuantityTypeIdentifier.heartRateVariabilitySDNN.rawValue, HKQuantityTypeIdentifier.stepCount.rawValue,
@@ -1514,7 +1514,7 @@ jobs:
           +            self.task = nil
           +            let again = self.runAgain
           +            self.runAgain = false
-          +            if more && (UIApplication.shared.applicationState == .active || again) {
+          +            if again || (more && UIApplication.shared.applicationState == .active) {
           +                // Let playback and interactive requests run between archive batches.
           +                self.task = Task { [weak self] in
           +                    try? await Task.sleep(nanoseconds: 600_000_000)
@@ -1549,6 +1549,11 @@ jobs:
           +            let types = lookup()
           +            let priority = ["HKCategoryTypeIdentifierMenstrualFlow", "HKCategoryTypeIdentifierOvulationTestResult",
           +                            "HKCategoryTypeIdentifierSleepAnalysis", "HKQuantityTypeIdentifierHeartRateVariabilitySDNN"]
+          REVIEWED_CHUNK
+      - name: Stage reviewed Swift changes 7
+        shell: bash
+        run: |
+          cat >> "$RUNNER_TEMP/notification.patch" <<'REVIEWED_CHUNK'
           +            let ids = priority.filter { types[$0] != nil } + types.keys.filter { !priority.contains($0) }.sorted()
           +            let reconcile = Date().timeIntervalSince(state?.lastReconciliation ?? .distantPast) > 4 * 3600
           +            state?.register(ids, recheck: reconcile)
@@ -1558,14 +1563,10 @@ jobs:
           +            for id in dirty { for key in HealthArchiveSchedule.lanes(id) { state?.enqueue(key) } }
           +            try persist()
           +            if Date().timeIntervalSince(lastSync) > 12 * 3600 {
-          +                try await snapshots(api: api, epoch: epoch, serial: serial)
-          +                lastSync = .now
+          +                do { try await snapshots(api: api, epoch: epoch, serial: serial); lastSync = .now }
+          +                catch is CancellationError { return false }
+          +                catch { lastSync = Date().addingTimeInterval(-12 * 3600 + 300) }
           +            }
-          REVIEWED_CHUNK
-      - name: Stage reviewed Swift changes 7
-        shell: bash
-        run: |
-          cat >> "$RUNNER_TEMP/notification.patch" <<'REVIEWED_CHUNK'
           +            let ringsPending = await historicalRings(api: api, epoch: epoch, serial: serial)
           +            let end = Date().addingTimeInterval(8)
           +            var failed = Set(retryAfter.keys)
@@ -1630,7 +1631,16 @@ jobs:
           +        try active(serial)
           +        let id = type.identifier
           +        var records: [[String: Any]] = []
+          +        var parts = HealthArchivePartBatch()
+          +        func emitParts(_ rows: [[String: Any]]) async throws {
+          +            for row in rows {
+          +                if let ready = try parts.append(row) {
+          +                    try await upload(ready, deleted: [], type: id, api: api, epoch: epoch, serial: serial)
+          +                }
+          +            }
+          +        }
           +        for sample in page.samples {
+          +            try active(serial)
           +            var row = Self.baseRecord(sample)
           +            var details = Self.metadata(sample)
           +            if let quantity = sample as? HKQuantitySample {
@@ -1642,6 +1652,9 @@ jobs:
           +                row["value"] = unit == HKUnit.percent() ? measured * 100 : measured
           +                row["unit"] = unit.unitString
           +                details["quantity_count"] = quantity.count
+          +                if quantity.count > 1 {
+          +                    details["series_points"] = try await HealthArchiveSeries.quantity(quantity, unit: unit, store: store, emit: emitParts)
+          +                }
           +            } else if let category = sample as? HKCategorySample {
           +                row["kind"] = "category"; row["value"] = category.value
           +            } else if let correlation = sample as? HKCorrelation {
@@ -1658,19 +1671,27 @@ jobs:
           +                    return member
           +                }
           +            } else {
-          +                let extra = try await HealthArchiveSpecial.encode(sample, store: store) { rows in
-          +                    try await self.upload(rows, deleted: [], type: id, api: api, epoch: epoch, serial: serial)
-          +                }
+          +                let extra = try await HealthArchiveSpecial.encode(sample, store: store, emit: emitParts)
           +                for (k, v) in extra where k != "details" { row[k] = v }
           +                if let special = extra["details"] as? [String: Any] { details.merge(special) { _, new in new } }
           +            }
           +            if !details.isEmpty { row["details"] = details }
           +            records.append(row)
           +        }
+          +        let remainingParts = parts.drain()
+          +        if !remainingParts.isEmpty {
+          +            try await upload(remainingParts, deleted: [], type: id, api: api, epoch: epoch, serial: serial)
+          +        }
           +        if !records.isEmpty || !page.deleted.isEmpty {
           +            try await upload(records, deleted: page.deleted, type: id, api: api, epoch: epoch, serial: serial)
           +        }
           +        try active(serial)
+          +        if id == HKObjectType.visionPrescriptionType().identifier {
+          +            var known = Set(state?.knownStock[id] ?? [])
+          +            known.formUnion(records.compactMap { $0["id"] as? String })
+          +            known.subtract(page.deleted)
+          +            state?.knownStock[id] = Array(known)
+          +        }
           +        let blob = try NSKeyedArchiver.archivedData(withRootObject: page.anchor, requiringSecureCoding: true)
           +        state?.acknowledge(key, anchor: blob, hasMore: page.samples.count + page.deleted.count >= pageSize)
           +        // A write racing an observer callback gets a further (normally empty) anchored read.
@@ -1680,6 +1701,13 @@ jobs:
           +    private func upload(_ rows: [[String: Any]], deleted: [String], type: String, api: MobileAPI,
           +                        epoch: String, serial: Int) async throws {
           +        try active(serial)
+          +        if deleted.count > 200 {
+          +            for start in stride(from: 0, to: deleted.count, by: 200) {
+          +                try await upload(start == 0 ? rows : [], deleted: Array(deleted[start..<min(start + 200, deleted.count)]),
+          +                                 type: type, api: api, epoch: epoch, serial: serial)
+          +            }
+          +            return
+          +        }
           +        let body: [String: Any] = ["schema": 1, "epoch": epoch, "enabled": true, "type_id": type, "records": rows,
           +            "deleted": deleted, "time_zone": TimeZone.current.identifier, "collected_at": Self.timestamp(Date())]
           +        do {
@@ -1751,6 +1779,11 @@ jobs:
           +                    var details: [String: Any] = ["has_schedule": med.hasSchedule, "is_archived": med.isArchived,
           +                        "general_form": concept.generalForm.rawValue, "medication_id": id,
           +                        "codes": concept.relatedCodings.map { ["system": $0.system, "code": $0.code] }
+          REVIEWED_CHUNK
+      - name: Stage reviewed Swift changes 8
+        shell: bash
+        run: |
+          cat >> "$RUNNER_TEMP/notification.patch" <<'REVIEWED_CHUNK'
           +                            .sorted { $0["system", default: ""] + $0["code", default: ""] < $1["system", default: ""] + $1["code", default: ""] }]
           +                    if let nickname = med.nickname { details["nickname"] = nickname }
           +                    details["sample_time_known"] = false
@@ -1762,6 +1795,12 @@ jobs:
           +                state?.knownStock[type] = Array(now)
           +            }
           +        }
+          +        if UserDefaults.standard.bool(forKey: "healthArchiveVision") {
+          +            try await reconcileVision(api: api, epoch: epoch, serial: serial)
+          +        }
+          +        if UserDefaults.standard.bool(forKey: "healthArchiveClinical") {
+          +            try await syncDocuments(api: api, epoch: epoch, serial: serial)
+          +        }
           +        let today = Calendar.current.startOfDay(for: .now)
           +        let start = Calendar.current.date(byAdding: .day, value: -6, to: today) ?? today
           +        if let current = try? await rings(from: start, to: today) {
@@ -1769,6 +1808,47 @@ jobs:
           +                                     api: api, epoch: epoch, serial: serial)
           +        }
           +        try persist()
+          +    }
+          +    private func reconcileVision(api: MobileAPI, epoch: String, serial: Int) async throws {
+          +        let type = HKObjectType.visionPrescriptionType()
+          +        let known = Set(state?.knownStock[type.identifier] ?? [])
+          +        guard !known.isEmpty else { return }
+          +        let visible: Set<String>? = await withCheckedContinuation { continuation in
+          +            let query = HKSampleQuery(sampleType: type, predicate: nil, limit: HKObjectQueryNoLimit, sortDescriptors: nil) {
+          +                _, samples, error in
+          +                continuation.resume(returning: error == nil ? Set((samples ?? []).map { $0.uuid.uuidString.lowercased() }) : nil)
+          +            }
+          +            store.execute(query)
+          +        }
+          +        guard let visible else { return }
+          +        try active(serial)
+          +        let removed = known.subtracting(visible)
+          +        guard !removed.isEmpty else { return }
+          +        try await upload([], deleted: Array(removed), type: type.identifier, api: api, epoch: epoch, serial: serial)
+          +        state?.knownStock[type.identifier] = Array(known.intersection(visible))
+          +        try persist()
+          +    }
+          +    private func syncDocuments(api: MobileAPI, epoch: String, serial: Int) async throws {
+          +        guard let type = HealthArchiveDocuments.type?.identifier,
+          +              let headers = try? await HealthArchiveDocuments.headers(store: store) else { return }
+          +        try active(serial)
+          +        var known = Set(state?.knownStock[type] ?? [])
+          +        let visible = Set(headers.map { $0.uuid.uuidString.lowercased() })
+          +        let removed = known.subtracting(visible)
+          +        // HealthKit documents are immutable. Only download bodies for records not already acknowledged.
+          +        for sample in headers where !known.contains(sample.uuid.uuidString.lowercased()) {
+          +            try active(serial)
+          +            let row = try await HealthArchiveDocuments.encode(sample, store: store) { rows in
+          +                try await self.upload(rows, deleted: [], type: type, api: api, epoch: epoch, serial: serial)
+          +            }
+          +            try await upload([row], deleted: [], type: type, api: api, epoch: epoch, serial: serial)
+          +            known.insert(sample.uuid.uuidString.lowercased()); state?.knownStock[type] = Array(known)
+          +            try persist()
+          +        }
+          +        if !removed.isEmpty {
+          +            try await upload([], deleted: Array(removed), type: type, api: api, epoch: epoch, serial: serial)
+          +            state?.knownStock[type] = Array(visible); try persist()
+          +        }
           +    }
           +    private func historicalRings(api: MobileAPI, epoch: String, serial: Int) async -> Bool {
           +        do {
@@ -1786,11 +1866,6 @@ jobs:
           +        } catch { return false }
           +    }
           +    private func rings(from start: Date, to end: Date) async throws -> [[String: Any]] {
-          REVIEWED_CHUNK
-      - name: Stage reviewed Swift changes 8
-        shell: bash
-        run: |
-          cat >> "$RUNNER_TEMP/notification.patch" <<'REVIEWED_CHUNK'
           +        let calendar = Calendar.current
           +        let keys: Set<Calendar.Component> = [.calendar, .era, .year, .month, .day]
           +        let predicate = HKQuery.predicate(forActivitySummariesBetweenStart: calendar.dateComponents(keys, from: start),
@@ -1854,6 +1929,199 @@ jobs:
           +        try persist()
           +    }
           +}
+          --- /dev/null
+          +++ b/Sources/App/HealthArchiveDocuments.swift
+          @@ -0,0 +1,72 @@
+          +import CryptoKit
+          +import Foundation
+          +import HealthKit
+          +
+          +// Document queries deliver several callbacks. Complete the continuation exactly once.
+          +private final class HealthDocumentBatch: @unchecked Sendable {
+          +    private let lock = NSLock()
+          +    private var documents: [HKCDADocumentSample] = []
+          +    private var continuation: CheckedContinuation<[HKCDADocumentSample], Error>?
+          +
+          +    init(_ continuation: CheckedContinuation<[HKCDADocumentSample], Error>) {
+          +        self.continuation = continuation
+          +    }
+          +
+          +    func receive(_ samples: [HKDocumentSample]?, done: Bool, error: Error?) {
+          +        lock.lock()
+          +        guard let continuation else { lock.unlock(); return }
+          +        documents.append(contentsOf: (samples ?? []).compactMap { $0 as? HKCDADocumentSample })
+          +        guard done || error != nil else { lock.unlock(); return }
+          +        self.continuation = nil
+          +        let result = documents
+          +        lock.unlock()
+          +        if let error { continuation.resume(throwing: error) }
+          +        else { continuation.resume(returning: result) }
+          +    }
+          +}
+          +
+          +@MainActor enum HealthArchiveDocuments {
+          +    static var type: HKDocumentType? { HKObjectType.documentType(forIdentifier: .CDA) }
+          +
+          +    private static func query(store: HKHealthStore, id: UUID? = nil) async throws -> [HKCDADocumentSample] {
+          +        guard let type else { return [] }
+          +        let predicate = id.map { HKQuery.predicateForObject(with: $0) }
+          +        return try await withCheckedThrowingContinuation { continuation in
+          +            let batch = HealthDocumentBatch(continuation)
+          +            let query = HKDocumentQuery(documentType: type, predicate: predicate,
+          +                                        limit: id == nil ? HKObjectQueryNoLimit : 1,
+          +                                        sortDescriptors: nil, includeDocumentData: id != nil) { _, samples, done, error in
+          +                batch.receive(samples, done: done, error: error)
+          +            }
+          +            store.execute(query)
+          +        }
+          +    }
+          +
+          +    static func headers(store: HKHealthStore) async throws -> [HKCDADocumentSample] {
+          +        try await query(store: store)
+          +    }
+          +
+          +    static func encode(_ sample: HKCDADocumentSample, store: HKHealthStore,
+          +                       emit: ([[String: Any]]) async throws -> Void) async throws -> [String: Any] {
+          +        let matches = try await query(store: store, id: sample.uuid)
+          +        guard let document = matches.first(where: { $0.uuid == sample.uuid })?.document,
+          +              let bytes = document.documentData else {
+          +            throw LokiError.message("这份医疗文档的正文暂时无法读取。")
+          +        }
+          +        let chunkSize = 7200
+          +        var parts = 0
+          +        for offset in stride(from: 0, to: bytes.count, by: chunkSize) {
+          +            try Task.checkCancellation()
+          +            let chunk = bytes[offset..<min(offset + chunkSize, bytes.count)]
+          +            try await emit([HealthArchiveParts.child(sample, series: "cda", index: parts, details: [
+          +                "encoding": "base64", "offset": offset, "data": chunk.base64EncodedString()
+          +            ])])
+          +            parts += 1
+          +        }
+          +        var row = NativeHealthInventory.baseRecord(sample)
+          +        row["kind"] = "document"
+          +        row["details"] = ["display_name": document.title, "bytes": bytes.count, "parts": parts,
+          +                          "sha256": SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()] as [String: Any]
+          +        return row
+          +    }
+          +}
+          --- /dev/null
+          +++ b/Sources/App/HealthArchivePayload.swift
+          @@ -0,0 +1,47 @@
+          +import Foundation
+          +import CryptoKit
+          +
+          +/// Indices identify immutable HealthKit sample contents across interrupted uploads.
+          +enum HealthArchiveParts {
+          +    static func id(parent: UUID, series: String, index: Int) -> String {
+          +        let seed = "\(parent.uuidString.lowercased())/\(series)/\(index)"
+          +        var bytes = Array(SHA256.hash(data: Data(seed.utf8)).prefix(16))
+          +        bytes[6] = (bytes[6] & 0x0f) | 0x80
+          +        bytes[8] = (bytes[8] & 0x3f) | 0x80
+          +        let hex = bytes.map { String(format: "%02x", $0) }.joined()
+          +        let lengths = [8, 4, 4, 4, 12]
+          REVIEWED_CHUNK
+      - name: Stage reviewed Swift changes 9
+        shell: bash
+        run: |
+          cat >> "$RUNNER_TEMP/notification.patch" <<'REVIEWED_CHUNK'
+          +        var cursor = hex.startIndex
+          +        return lengths.map { length in
+          +            let end = hex.index(cursor, offsetBy: length)
+          +            defer { cursor = end }
+          +            return String(hex[cursor..<end])
+          +        }.joined(separator: "-")
+          +    }
+          +
+          +    static let blockSize = 7200
+          +
+          +    static func blockRanges(for length: Int) -> [Range<Int>] {
+          +        stride(from: 0, to: length, by: blockSize).map { $0..<min($0 + blockSize, length) }
+          +    }
+          +}
+          +
+          +struct HealthArchivePartBatch {
+          +    private var rows: [[String: Any]] = []
+          +    private var bytes = 0
+          +
+          +    /// Leave room for the page envelope and send several waveform or document chunks per round trip.
+          +    mutating func append(_ row: [String: Any]) throws -> [[String: Any]]? {
+          +        let length = try JSONSerialization.data(withJSONObject: row).count + 1
+          +        let ready = !rows.isEmpty && (bytes + length > 64 * 1024 || rows.count >= 40) ? drain() : nil
+          +        rows.append(row)
+          +        bytes += length
+          +        return ready
+          +    }
+          +
+          +    mutating func drain() -> [[String: Any]] {
+          +        let ready = rows
+          +        rows.removeAll(keepingCapacity: true)
+          +        bytes = 0
+          +        return ready
+          +    }
+          +}
+          --- /dev/null
+          +++ b/Tests/HealthArchivePayload/main.swift
+          @@ -0,0 +1,34 @@
+          +import Foundation
+          +
+          +let fixture = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+          +let stable = HealthArchiveParts.id(parent: fixture, series: "fhir", index: 11)
+          +precondition(stable == "7e8429df-09a1-89ba-82a8-97ad9bffa5a8")
+          +precondition(stable != HealthArchiveParts.id(parent: fixture, series: "quantity_series", index: 11))
+          +precondition(stable != HealthArchiveParts.id(parent: fixture, series: "fhir", index: 12))
+          +precondition(HealthArchiveParts.blockRanges(for: 0).isEmpty)
+          +let chunk = HealthArchiveParts.blockSize
+          +for size in [1, chunk - 1, chunk, chunk + 1, 3 * chunk, 3 * chunk + 11] {
+          +    let payload = Data((0..<size).map { UInt8(truncatingIfNeeded: $0) })
+          +    let ranges = HealthArchiveParts.blockRanges(for: size)
+          +    let bytes = ranges.map { payload.subdata(in: $0).base64EncodedString() }
+          +    precondition(bytes.allSatisfy { $0.utf8.count <= 9600 })
+          +    let decoded = bytes.reduce(into: Data()) { $0.append(Data(base64Encoded: $1)!) }
+          +    precondition(decoded == payload)
+          +    let ids = ranges.indices.map { HealthArchiveParts.id(parent: fixture, series: "fhir", index: $0) }
+          +    precondition(Set(ids).count == ranges.count)
+          +}
+          +print("Health archive IDs and binary reconstruction passed")
+          +var batch = HealthArchivePartBatch()
+          +var transferred: [Int] = []
+          +var requests = 0
+          +for i in 0..<25 {
+          +    let row: [String: Any] = ["index": i, "data": String(repeating: "a", count: 9536)]
+          +    if let ready = try batch.append(row) {
+          +        let encoded = try JSONSerialization.data(withJSONObject: ready)
+          +        precondition(encoded.count <= 65536 && ready.count > 1)
+          +        transferred += ready.map { $0["index"] as! Int }
+          +        requests += 1
+          +    }
+          +}
+          +transferred += batch.drain().map { $0["index"] as! Int }
+          +precondition(transferred == Array(0..<25) && requests < 6 && batch.drain().isEmpty)
+          --- /dev/null
+          +++ b/Tests/HealthArchiveSchedule/main.swift
+          @@ -0,0 +1,23 @@
+          +import Foundation
+          +
+          +let now = Date(timeIntervalSince1970: 1_784_000_000)
+          +let anchor1 = Data([1])
+          +let anchor2 = Data([2])
+          +var schedule = HealthArchiveSchedule(epoch: "consent-1", now: now)
+          +schedule.register(["hrv", "steps", "cycle"], recheck: true)
+          +precondition(schedule.queued == ["recent:hrv", "recent:steps", "recent:cycle", "past:hrv", "past:steps", "past:cycle"])
+          +let unconfirmed = try JSONEncoder().encode(schedule)
+          +let retry = try JSONDecoder().decode(HealthArchiveSchedule.self, from: unconfirmed)
+          +precondition(retry.queued.first == "recent:hrv" && retry.anchors.isEmpty)
+          +schedule.acknowledge("recent:hrv", anchor: anchor1, hasMore: true)
+          +precondition(schedule.queued.first == "recent:steps" && schedule.queued.last == "recent:hrv")
+          +schedule.acknowledge("recent:steps", anchor: anchor2, hasMore: false)
+          +schedule.register(["hrv", "steps", "cycle"], recheck: false)
+          +precondition(!schedule.queued.contains("recent:steps"))
+          +schedule.enqueue("recent:steps"); schedule.enqueue("recent:steps")
+          +precondition(schedule.queued.filter { $0 == "recent:steps" }.count == 1)
+          +let persisted = try JSONDecoder().decode(HealthArchiveSchedule.self, from: JSONEncoder().encode(schedule))
+          +precondition(persisted.anchors["recent:steps"] == anchor2 && persisted.boundary == schedule.boundary)
+          +let newConsent = HealthArchiveSchedule(epoch: "consent-2", now: now)
+          +precondition(newConsent.anchors.isEmpty && newConsent.queued.isEmpty)
+          +print("Health archive scheduling checks passed")
           REVIEWED_CHUNK
       - name: Apply reviewed wake and health changes
         working-directory: app-source
@@ -1868,29 +2136,33 @@ jobs:
               data=p.read_bytes().replace(b'\r\n', b'\n')
               assert sha256(data).hexdigest()==expected,name
               p.write_bytes(data)
-          new_paths=['Sources/App/HealthArchiveCatalog.swift', 'Sources/App/HealthArchiveSchedule.swift', 'Sources/App/HealthArchiveSeries.swift', 'Sources/App/HealthArchiveSpecial.swift', 'Sources/App/NativeHealthInventory.swift', 'Tests/SleepWakeHealth/main.swift']
+          new_paths=['Sources/App/HealthArchiveCatalog.swift', 'Sources/App/HealthArchiveDocuments.swift', 'Sources/App/HealthArchivePayload.swift', 'Sources/App/HealthArchiveSchedule.swift', 'Sources/App/HealthArchiveSeries.swift', 'Sources/App/HealthArchiveSpecial.swift', 'Sources/App/NativeHealthInventory.swift', 'Tests/HealthArchivePayload/main.swift', 'Tests/HealthArchiveSchedule/main.swift', 'Tests/SleepWakeHealth/main.swift']
           for name in new_paths:
               assert not Path(name).exists(),name
               Path(name).parent.mkdir(parents=True,exist_ok=True)
           SOURCE_BEFORE
-          echo '4009db35669a561c0e808e25482dbd36f1a7f75179d8569a9e01d671ee882939  '$RUNNER_TEMP'/notification.patch' | shasum -a 256 -c -
+          echo '5609d004131df07163d16d21b26d61cc8a9ce51f6d104c3208575cc514f99e27  '$RUNNER_TEMP'/notification.patch' | shasum -a 256 -c -
           patch --batch -p1 < "$RUNNER_TEMP/notification.patch"
           shasum -a 256 -c <<'SOURCE_AFTER'
-          e2c6a457d27b4c4291c78b8fbf01ebe377be795b8df19b77b9c166bed8bd93bf  Sources/App/HealthService.swift
-          f34ba6ddbaa67d18b8a350464660c912d2995af218214e3690d9108e50730a7e  Sources/App/NativeHealthSync.swift
+          29b83a6525b12cad338d082e6921e0e4860c72ce336e3af3b60376e8c3db7d1f  Sources/App/HealthService.swift
+          86e40468377b5775835f69f3f1315a358b2b2a067ac1d5580f34d54e6d970ea1  Sources/App/NativeHealthSync.swift
           db551c8e0544714022c100e884577e6b352a6535968d373be22c1242cc2df54f  Sources/App/SleepDetails.swift
           2b00c307b6f7b0fdebd7c8c11ad7a8df1236c4e18f6d404d194db497453d221d  Sources/App/SleepIntervals.swift
           439ca1d309c0e037b36dcd15c892fdfd08a00822a85ed1016e298bd22c3e88dd  Sources/App/AppState.swift
           d583b3e364d9f71ff7d60556f94c1dcc885bf4d45f74b9b60b17fb5f91fc7315  Sources/App/ChatView.swift
           a0a5450b36813ac3f85210736957cc6a369bc88995e36732ac3b65504f42be43  Sources/App/LokiApp.swift
-          3bf6b243296505dbb290e9b32abbef7bb07db367dc604e435ec874e43f8cf170  Sources/App/HealthView.swift
+          a2902614603b9fc34293c51c605f2a4c9c27e2e07ad7e22bb2833aae7cc26e66  Sources/App/HealthView.swift
           bfa6da0b1634ddd2ab48053aa3c86b53c045395d5075b0160e8aa53d684d3ee1  Sources/App/LocationService.swift
           fed1b5caebbcf2d7d299814fb00abae3a7f95a61567cd31982de36dc70dc42f8  Tests/SleepWakeHealth/main.swift
           2c6bbc115c865f8b00097da15658db39696b22fc3b06eedc3dd8ecadcba92118  Sources/App/HealthArchiveSpecial.swift
-          1245a276d41433b2fd9fa21783626a2d41add8a2ebaae76c98ee35f8551fa696  Sources/App/HealthArchiveSeries.swift
+          fada11de55caadcfdc40a8b846441f59d3aa49abf972f6ba2d22666587ffb2d6  Sources/App/HealthArchiveSeries.swift
           3c919ead47116ebc8dd5b06781ba013f6b7ed669687ce88730919399d92fb70d  Sources/App/HealthArchiveCatalog.swift
           fac43f910d9a6390c810ebe79e6dff5cdca6a023ddb258b4156c6d1978b9ce78  Sources/App/HealthArchiveSchedule.swift
-          d407e96ce2a62f362d718a52dbccc56e5da058614ea52d3e0bff1084a4467d50  Sources/App/NativeHealthInventory.swift
+          03fcc8edad37f05d8f696c8c6150524dd28ef316705b097047368ea1b2ef13b8  Sources/App/NativeHealthInventory.swift
+          a2ea969d77a40708052975951e961d4ff47247353af74af61f086015938b6aee  Sources/App/HealthArchiveDocuments.swift
+          e739df518dd2d2f6d29f00bc383223f7af992ced9ff1cebfa117ef28a2e8f0be  Sources/App/HealthArchivePayload.swift
+          910306da0a9cb8930e5dc700c79ddfd83e6e1305363981b1887c8bb9c3f9bed7  Tests/HealthArchivePayload/main.swift
+          a6daecf3041926fbb6b7011744d5acd81685c83deb6bb6fe689c18c99730e3aa  Tests/HealthArchiveSchedule/main.swift
           SOURCE_AFTER
           python3 - <<'BUMP'
           from pathlib import Path
@@ -1918,6 +2190,18 @@ jobs:
         run: |
           swiftc -swift-version 5 Sources/App/SleepIntervals.swift Sources/App/SleepDetails.swift Tests/SleepWakeHealth/main.swift -o "$RUNNER_TEMP/test-sleep-wake"
           "$RUNNER_TEMP/test-sleep-wake"
+      - name: Health archive payload identity and binary reconstruction
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc -swift-version 5 Sources/App/HealthArchivePayload.swift Tests/HealthArchivePayload/main.swift -o "$RUNNER_TEMP/health-archive-payload"
+          "$RUNNER_TEMP/health-archive-payload"
+      - name: Health archive scheduling and fairness
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc -swift-version 5 Sources/App/HealthArchiveSchedule.swift Tests/HealthArchiveSchedule/main.swift -o "$RUNNER_TEMP/health-archive-scheduling"
+          "$RUNNER_TEMP/health-archive-scheduling"
       - name: Test app presence, typing and voice activity
         working-directory: app-source
         shell: bash
