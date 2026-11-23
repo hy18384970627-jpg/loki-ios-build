@@ -1,0 +1,315 @@
+name: Test Loki cold launches and HealthKit consent on simulator 112303
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/health-authorize-sim-112303.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: loki-health-authorize-sim-112303
+  cancel-in-progress: false
+jobs:
+  app:
+    runs-on: xcode-27
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-iphone-control
+          ref: 8be1a93226edf64a2be9678f429383bc891f3dce
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: d6b09385be43ff8b595f01c0729dad073f83fd82
+          path: verified-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: bdf05059603c369e0f2cceb56890ed1fa2f7d437
+          path: prior-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 3d5400d4edd282c8353fe9ca5f811e64fa35d2a5
+          path: notify-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 555062cda24502d988752cfb072df51bdf0498f4
+          path: time-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 3640476e16425c88d43f258027432c102838cb4a
+          path: mood-desk-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 94570727471955e14c95ba446dbef62aaeb29caa
+          path: health-wake-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: ee5fc9af98d33c71deb0661f8012cea46f2b87ae
+          path: launch-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 0872673023b590e71745ee3805dd865fd7d60140
+          path: consent-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 5c9a09a7a22e9cce113f09f8a9e01dc22ab7a08f
+          path: authorization-native-recipe
+          persist-credentials: false
+      - name: Build project from the exact native authorization revision
+        shell: bash
+        run: |
+          echo 'b2e2b4e706ca5dd8d6c193174e65f153632d5b053ee58bfd5c26fe21f56479c1  authorization-native-recipe/.github/workflows/health-authorize-device-112303.yml' | shasum -a 256 -c -
+          ruby <<'RESTORE'
+          require 'yaml'
+          steps = YAML.load_file('authorization-native-recipe/.github/workflows/health-authorize-device-112303.yml').fetch('jobs').fetch('app').fetch('steps')
+          targets = ['Reconstruct the verified 112302 client', 'Apply reviewed authorization changes', 'Generate project']
+          targets.each do |name|
+            step = steps.fetch(steps.index { |s| s['name'] == name })
+            system('/bin/bash', '-e', '-o', 'pipefail', '-c', step.fetch('run'), chdir: step.fetch('working-directory','.')) or abort("Failed to restore #{name}")
+          end
+          RESTORE
+      - name: Compile complete App for simulator
+        working-directory: app-source
+        shell: bash
+        run: |
+          xcodebuild -project Loki.xcodeproj -scheme Loki -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath build/Simulator CODE_SIGN_IDENTITY="-" build > build/simulator.log 2>&1 || { tail -100 build/simulator.log; exit 1; }
+      - name: Boot iPhone simulator and verify both cold launches
+        working-directory: app-source
+        shell: bash
+        run: |
+          python3 - <<'STARTUP_SMOKE'
+          import json
+          import os
+          import plistlib
+          import re
+          import subprocess
+          import sys
+          import time
+          from pathlib import Path
+          
+          def run(*args, timeout=120, check=True):
+              process = subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
+              if check and process.returncode:
+                  raise RuntimeError(f'{Path(args[0]).name} failed ({process.returncode}): {process.stdout[-900:]}')
+              return process
+          
+          def sim(*args, **kwargs):
+              return run('xcrun','simctl',*args,**kwargs).stdout.strip()
+          
+          def runtimes():
+              items = json.loads(sim('list','runtimes','-j'))['runtimes']
+              return sorted((r for r in items if r.get('isAvailable') and '.iOS-' in r['identifier']
+                             and int(r['version'].split('.')[0]) >= 26),
+                            key=lambda r: tuple(int(c) for c in r['version'].split('.')), reverse=True)
+          
+          available = runtimes()
+          if not available:
+              print('Installing the iOS simulator runtime matching the selected Xcode.', flush=True)
+              run('xcodebuild','-downloadPlatform','iOS',timeout=1250)
+              available = runtimes()
+          if not available:
+              raise RuntimeError('No iOS 26+ simulator runtime is installed')
+          runtime = available[0]
+          devices = json.loads(sim('list','devices','-j'))['devices'].get(runtime['identifier'],[])
+          iphones = [d for d in devices if d.get('isAvailable') and d['name'].startswith('iPhone')]
+          # This job has a clean hosted home. Prefer the already prepared, smaller-display phone.
+          def compact_rank(name):
+              return (name in ('iPhone 17e', 'iPhone 16e', 'iPhone SE (3rd generation)'),
+                      name in ('iPhone 18', 'iPhone 17','iPhone 16'), 'Duo' not in name, name)
+          if iphones:
+              device = max(iphones,key=lambda d:compact_rank(d['name']))
+              udid = device['udid']
+              print('Selected simulator model',device['name'],flush=True)
+          else:
+              types = [t for t in runtime.get('supportedDeviceTypes',[]) if t['name'].startswith('iPhone')]
+              if not types: raise RuntimeError('Runtime has no compatible iPhone')
+              model = max(types,key=lambda t:compact_rank(t['name']))
+              udid = sim('create','Loki 112303 startup '+os.environ.get('GITHUB_RUN_ID','validation'),model['identifier'],runtime['identifier'])
+          print('Simulator runtime',runtime['version'],flush=True)
+          sim('bootstatus',udid,'-b',timeout=360)
+          app = Path('build/Simulator/Build/Products/Debug-iphonesimulator/Loki.app').resolve()
+          info = plistlib.loads((app/'Info.plist').read_bytes())
+          bid, executable = info['CFBundleIdentifier'], info['CFBundleExecutable']
+          assert info['CFBundleVersion'] == '112303'
+          # simctl get_app_container can stall on hosted machines. Locate the same private simulator's
+          # containers locally and verify both the bundle ID and version before using them.
+          simhome=Path.home()/'Library/Developer/CoreSimulator/Devices'/udid/'data'
+          def installed_bundle():
+              for p in (simhome/'Containers/Bundle/Application').glob('*/Loki.app/Info.plist'):
+                  try: value=plistlib.loads(p.read_bytes())
+                  except (FileNotFoundError,plistlib.InvalidFileException): continue
+                  if value.get('CFBundleIdentifier')==bid and value.get('CFBundleVersion')=='112303':
+                      return p.parent
+              return None
+          def installed_data():
+              for p in (simhome/'Containers/Data/Application').glob('*/.com.apple.mobile_container_manager.metadata.plist'):
+                  try: value=plistlib.loads(p.read_bytes())
+                  except (FileNotFoundError,plistlib.InvalidFileException): continue
+                  if value.get('MCMMetadataIdentifier')==bid: return p.parent
+              return None
+          assert installed_bundle() is None and installed_data() is None,'fresh scenario already contained the test app'
+          print('Simulator booted. Installing the signed simulator product.',flush=True)
+          for attempt,budget in enumerate((440,300),1):
+              # Keep the installation transaction alive as long as the bundle and data container are being registered.
+              client=subprocess.Popen(['xcrun','simctl','install',udid,str(app)],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
+              try:
+                  deadline=time.monotonic()+budget
+                  while time.monotonic()<deadline:
+                      bundle=installed_bundle(); data=installed_data()
+                      if bundle and data:break
+                      if client.poll() not in (None,0):
+                          print('simctl install:',(client.stdout.read() or '')[-600:],flush=True)
+                          break
+                      time.sleep(2)
+              finally:
+                  if client.poll() is None:
+                      try: client.wait(timeout=15 if bundle and data else 1)
+                      except subprocess.TimeoutExpired: client.terminate()
+              if bundle and data:break
+              print('No matching registered files after install attempt',attempt,flush=True)
+          else: raise RuntimeError('Simulator did not materialize the signed bundle and its data container')
+          print('Located clean simulator app, verified build 112303 and its data container.',flush=True)
+          preferences = data/'Library/Preferences'/(bid+'.plist')
+          marker = data/'tmp/loki-health-observers-ready.json'
+          report = Path('build/startup-smoke.json')
+          evidence = dict(build=info['CFBundleVersion'],runtime=runtime['version'],checks=[])
+          def save():
+              report.write_text(json.dumps(evidence, indent=2))
+          def crash_reports(start):
+              bases = [Path.home()/'Library/Logs/DiagnosticReports',
+                       Path.home()/'Library/Developer/CoreSimulator/Devices'/udid/'data/Library/Logs/CrashReporter']
+              files=[]
+              for base in bases:
+                  if not base.is_dir(): continue
+                  for f in base.rglob(executable+'*'):
+                      if f.suffix in ('.ips','.crash') and f.stat().st_mtime >= start: files.append(f)
+              return files
+          def check(label, verify_marker=False):
+              started = time.time()
+              print('Cold launch:',label,flush=True)
+              if marker.exists(): marker.unlink()
+              auth_file=data/'tmp/loki-health-auth-ready.json'
+              auth_file.unlink(missing_ok=True)
+              opts = {'env': {**os.environ, 'SIMCTL_CHILD_LOKI_HEALTH_STARTUP_SMOKE':'1'}}
+              proc=subprocess.Popen(['xcrun','simctl','launch',udid,bid],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,**opts)
+              # simctl prints the launched PID. Direct libproc calls avoid spawning 'ps' repeatedly
+              # on a busy hosted macOS runner and give the executable path for this exact PID.
+              import ctypes
+              lib = ctypes.CDLL('/usr/lib/libproc.dylib')
+              def path_for_pid(n):
+                  buf=ctypes.create_string_buffer(4096)
+                  return os.fsdecode(buf.value) if lib.proc_pidpath(n,buf,len(buf))>0 else ''
+              def match(n):
+                  result=path_for_pid(n)
+                  return bool(result and Path(result).resolve()==(bundle/executable).resolve())
+              def lookup():
+                  count=lib.proc_listallpids(None,0)
+                  if count<1:return None
+                  pids=(ctypes.c_int*(count+256))()
+                  n=lib.proc_listallpids(pids,ctypes.sizeof(pids))
+                  for i in range(min(n,len(pids))):
+                      if pids[i]>0 and match(pids[i]):return pids[i]
+                  return None
+              deadline=time.monotonic()+300
+              pid=None
+              try:
+                  while time.monotonic()<deadline:
+                      if proc.poll() is not None:
+                          output=proc.stdout.read()
+                          found=re.search(re.escape(bid)+r':\s*(\d+)',output)
+                          if proc.returncode or not found:raise RuntimeError('App launch rejected: '+output[-650:])
+                          pid=int(found.group(1))
+                          break
+                      found=lookup()
+                      if found:pid=found;break
+                      time.sleep(3)
+                  if not pid:raise RuntimeError('The simulator never launched the verified app executable')
+                  print('Runtime launched', label,flush=True)
+                  # Leave the simctl IPC client running while the target establishes its services.
+                  held=time.monotonic()
+                  auth_file=data/'tmp/loki-health-auth-ready.json'
+                  while time.monotonic()-held<25 or (verify_marker and not auth_file.is_file() and time.monotonic()-held<130):
+                      if not match(pid):
+                          time.sleep(3)
+                          names=[p.name for p in crash_reports(started)]
+                          raise RuntimeError(f'{label}: original app process exited; crash reports: {names}')
+                      time.sleep(1)
+              finally:
+                  if proc.poll() is None: proc.terminate()
+              reports = crash_reports(started)
+              if reports: raise RuntimeError(f'{label}: simulator produced a crash report')
+              result = dict(scenario=label, same_pid_alive_seconds=24, new_app_crash_reports=0)
+              if verify_marker:
+                  assert marker.is_file(), 'Healthy PID did not finish the real observer registration path'
+                  mark = json.loads(marker.read_text())
+                  assert float(mark['created_at']) >= int(started) and float(mark['created_at']) < time.time()+3
+                  core, archive = mark['core'], mark['archive']
+                  assert len(core) == len(set(core)) == 6 and len(archive) == len(set(archive)) == 6
+                  assert not set(core).intersection(archive)
+                  assert not any('VisionPrescription' in k or 'MedicationDoseEvent' in k for k in core+archive)
+                  anchored = mark['anchored']
+                  assert len(set(anchored)) > 170 and len(anchored)==len(set(anchored))
+                  assert all('VisionPrescription' not in k for k in anchored)
+                  assert any('WorkoutTypeIdentifier' in k for k in anchored)
+                  assert any('MedicationDoseEvent' in k for k in anchored)
+                  assert auth_file.is_file(), 'The real authorization preflight did not finish'
+                  auth=json.loads(auth_file.read_bytes())
+                  counts={}
+                  for group in ('basic','ordinary','advanced'):
+                      actual=auth[group]
+                      assert isinstance(actual,list) and len(actual)==len(set(actual))
+                      assert isinstance(auth.get(group+'_status'),int), (group,auth.get(group+'_error','no status'))
+                      assert not any(any(t in x for t in ('HipCircumference','VisionPrescription','MedicationDoseEvent','Clinical')) for x in actual),group
+                      counts[group]=len(actual)
+                  assert counts['basic']==6 and counts['ordinary']>=130 and counts['advanced']>=5,counts
+                  assert auth.get('invalid_correlation_rejected') is True
+                  result.update(authorization_preflight_groups=counts,invalid_authorization_caught=True)
+                  result.update(confirmed_health_observers=len(core)+len(archive), verified_archive_constructors=len(anchored),
+                                persistent_health_auto_sync=True, persistent_health_background=True)
+              print('Cold launch verified:',label,flush=True)
+              return result
+          try:
+              evidence['checks'].append(check('fresh install'))
+              save()
+              sim('shutdown',udid,timeout=150)
+              # Seed the persistent domain while cfprefsd is stopped, exactly as an upgrade retains these switches.
+              prefs=plistlib.loads(preferences.read_bytes()) if preferences.exists() else {}
+              prefs.update(healthAutoSync=True, healthBackground=True, validateArchiveQueryConstructors=True,validateHealthReadAuthorization=True)
+              preferences.parent.mkdir(exist_ok=True,parents=True)
+              preferences.write_bytes(plistlib.dumps(prefs,fmt=plistlib.FMT_BINARY))
+              assert all(plistlib.loads(preferences.read_bytes()).get(k) is True for k in ('healthAutoSync','healthBackground','validateArchiveQueryConstructors','validateHealthReadAuthorization'))
+              sim('bootstatus',udid,'-b',timeout=360)
+              evidence['checks'].append(check('upgrade with health syncing and background enabled', True))
+              save()
+              print(json.dumps(evidence),flush=True)
+          finally:
+              save()
+          STARTUP_SMOKE
+      - name: Preserve simulator verification
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: loki-health-authorize-112303-simulator
+          path: |
+            app-source/build/simulator.log
+            app-source/build/startup-smoke.json
+          if-no-files-found: warn
+          retention-days: 2
