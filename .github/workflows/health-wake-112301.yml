@@ -1,0 +1,1988 @@
+name: Build Loki sleep and health sharing 112301
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/health-wake-112301.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: loki-health-wake-112301
+  cancel-in-progress: false
+jobs:
+  app:
+    runs-on: xcode-27
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-iphone-control
+          ref: 8be1a93226edf64a2be9678f429383bc891f3dce
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: d6b09385be43ff8b595f01c0729dad073f83fd82
+          path: verified-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: bdf05059603c369e0f2cceb56890ed1fa2f7d437
+          path: prior-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 3d5400d4edd282c8353fe9ca5f811e64fa35d2a5
+          path: notify-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 555062cda24502d988752cfb072df51bdf0498f4
+          path: time-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 3640476e16425c88d43f258027432c102838cb4a
+          path: mood-desk-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 94570727471955e14c95ba446dbef62aaeb29caa
+          path: health-wake-base-recipe
+          persist-credentials: false
+      - name: Reconstruct verified public build 112104
+        shell: bash
+        run: |
+          echo 'bbc08a0f56a7d81adc2d9abc8c68be9a2698f40156d3b33e37cf0e14b9463747  health-wake-base-recipe/.github/workflows/mood-desk-112104.yml' | shasum -a 256 -c -
+          ruby <<'RUBY'
+          require 'yaml'
+          steps = YAML.load_file('health-wake-base-recipe/.github/workflows/mood-desk-112104.yml').fetch('jobs').fetch('app').fetch('steps')
+          ['Reconstruct verified public build 112103','Apply reviewed mood and desk changes'].each_with_index do |name, i|
+            matching = steps.select { |s| s['name'] == name }
+            abort('Missing prior step') unless matching.size == 1
+            step = matching.first
+            directory = i == 0 ? '.' : 'app-source'
+            abort('Unexpected path') unless step.fetch('working-directory','.') == directory
+            system('/bin/bash','-e','-o','pipefail','-c',step.fetch('run'), chdir: directory) or abort(name)
+          end
+          RUBY
+      - name: Stage reviewed Swift changes 1
+        shell: bash
+        run: |
+          cat > "$RUNNER_TEMP/notification.patch" <<'REVIEWED_CHUNK'
+          --- a/Sources/App/HealthService.swift
+          +++ b/Sources/App/HealthService.swift
+          @@ -25,55 +25,101 @@
+               @Published var busy = false
+               @Published var sleepDetails: SleepDetails?
+               @Published var sleepTrend: [HealthDay] = []
+          -    var recentSleep: [[String: Any]] = []
+          +    var recentSleep: [SleepNight] = []
+               @Published var syncMessage = "尚未启用自动同步"
+               @Published var lastSyncedAt = UserDefaults.standard.object(forKey: "healthLastSync") as? Date
+               let store = HKHealthStore()
+          +    lazy var inventory = NativeHealthInventory(store: store)
+               var pendingSnapshot: NativeHealthSnapshot? = PrivateFiles.load("health-pending.json", fallback: nil)
+               var syncing = false
+               var lastSyncedSamples: Data?
+               var sleepCacheUpdatedAt: Date?
+               var cachedSleepReading: HealthReading?
+               private var observers: [HKObserverQuery] = []
+          +    private var refreshTask: Task<Void, Never>?
+          +    private var observedChanges = 0
+          +    private var reviewingAccess = false
+          +    var sharingChoice: Bool? {
+          +        guard let id = Bundle.main.bundleIdentifier else { return nil }
+          +        return UserDefaults.standard.persistentDomain(forName: id)?["healthAutoSync"] as? Bool
+          +    }
+               private var types: Set<HKObjectType> {
+                   [HKObjectType.quantityType(forIdentifier: .heartRate)!,
+                    HKObjectType.quantityType(forIdentifier: .heartRateVariabilitySDNN)!,
+          +         HKObjectType.quantityType(forIdentifier: .respiratoryRate)!,
+          +         HKObjectType.quantityType(forIdentifier: .appleSleepingWristTemperature)!,
+                    HKObjectType.quantityType(forIdentifier: .stepCount)!,
+                    HKObjectType.categoryType(forIdentifier: .sleepAnalysis)!]
+               }
+               func authorize() async throws {
+                   guard HKHealthStore.isHealthDataAvailable() else { throw LokiError.message("这台设备没有可用的健康数据服务。") }
+          -        try await store.requestAuthorization(toShare: [], read: types)
+          +        try await store.requestAuthorization(toShare: [], read: types.union(inventory.regularReadTypes))
+          +        inventory.resetAfterReview()
+          +        UserDefaults.standard.set(true, forKey: "healthInventoryAccessReviewedV1")
+          +        sleepCacheUpdatedAt = nil
+                   await refresh()
+               }
+          +    func reviewSharingOnForeground() async {
+          +        guard !reviewingAccess, sharingChoice != false, HKHealthStore.isHealthDataAvailable() else { return }
+          +        if sharingChoice == true && UserDefaults.standard.bool(forKey: "healthInventoryAccessReviewedV1") { return }
+          +        reviewingAccess = true
+          +        defer { reviewingAccess = false }
+          +        do {
+          +            if sharingChoice == nil { try await setAutomaticSharing(true) }
+          +            else {
+          +                try await authorize()
+          +                if UserDefaults.standard.bool(forKey: "healthBackground") { try await background(true) }
+          +            }
+          +        } catch { syncMessage = error.localizedDescription }
+          +    }
+               func refresh(upload: Bool = true) async {
+          -        guard !busy else { return }
+          -        busy = true; defer { busy = false }
+          -        do {
+          -            var results: [HealthReading] = []
+          -            for (id, title, identifier, unit, label) in [
+          -                ("heart", "心率", HKQuantityTypeIdentifier.heartRate, HKUnit.count().unitDivided(by: .minute()), "次/分"),
+          -                ("hrv", "HRV · SDNN", HKQuantityTypeIdentifier.heartRateVariabilitySDNN, HKUnit.secondUnit(with: .milli), "毫秒")
+          -            ] {
+          -                let type = HKQuantityType.quantityType(forIdentifier: identifier)!
+          +        if let refreshTask { await refreshTask.value }
+          +        else {
+          +            busy = true
+          +            let task = Task { @MainActor in
+          +                while true {
+          +                    let revision = observedChanges
+          +                    await collectReadings()
+          +                    if revision == observedChanges { break }
+          +                    sleepCacheUpdatedAt = nil
+          +                }
+          +                busy = false
+          +                refreshTask = nil
+          +            }
+          +            refreshTask = task
+          +            await task.value
+          +        }
+          +        if upload { await syncPending() }
+          +    }
+          +    private func collectReadings() async {
+          +        var results: [HealthReading] = []
+          +        var failures: [String] = []
+          +        for (id, title, identifier, unit, label) in [
+          +            ("heart", "心率", HKQuantityTypeIdentifier.heartRate, HKUnit.count().unitDivided(by: .minute()), "次/分"),
+          +            ("hrv", "HRV · SDNN", HKQuantityTypeIdentifier.heartRateVariabilitySDNN, HKUnit.secondUnit(with: .milli), "毫秒")
+          +        ] {
+          +            let type = HKQuantityType.quantityType(forIdentifier: identifier)!
+          +            do {
+                           if let sample = try await samples(type).first as? HKQuantitySample {
+                               results.append(.init(id: id, title: title, value: sample.quantity.doubleValue(for: unit),
+                                   unit: label, recordedAt: sample.endDate, source: sample.sourceRevision.source.name))
+                           }
+          -            }
+          -            let steps = HKQuantityType.quantityType(forIdentifier: .stepCount)!
+          +            } catch { failures.append(error.localizedDescription) }
+          +        }
+          +        let steps = HKQuantityType.quantityType(forIdentifier: .stepCount)!
+          +        do {
+                       if let count = try await todaySteps(steps) {
+                           results.append(.init(id: "steps", title: "今日步数", value: count.0, unit: "步",
+                                                recordedAt: count.1, source: "Apple 健康聚合"))
+                       }
+          +        } catch { failures.append(error.localizedDescription) }
+          +        do {
+                       if let sleep = try await sleepSummary() { results.append(sleep) }
+          -            readings = results
+          -            message = results.isEmpty ? "没有可读取的数据。可能尚未授权、未采集或未同步；空结果不能区分原因。" : "显示原始采样时间；旧数据不会当作当前状态。HRV 不用于诊断。"
+          -            if UserDefaults.standard.bool(forKey: "healthAutoSync") {
+          -                queueSnapshot(enabled: true)
+          -                if upload { Task { await syncPending() } }
+          -            }
+          -        } catch { message = error.localizedDescription }
+          +        } catch { failures.append(error.localizedDescription) }
+          +        if results.isEmpty, let error = failures.first { message = error; return }
+          +        readings = results
+          +        message = results.isEmpty ? "没有可读取的数据。可能尚未授权、未采集或未同步；空结果不能区分原因。" : "显示原始采样时间；旧数据不会当作当前状态。HRV 不用于诊断。"
+          +        if UserDefaults.standard.bool(forKey: "healthAutoSync") { queueSnapshot(enabled: true) }
+               }
+               private func samples(_ type: HKSampleType) async throws -> [HKSample] {
+                   try await withCheckedThrowingContinuation { continuation in
+          @@ -102,27 +148,29 @@
+                   return count.map { ($0, latest.endDate) }
+               }
+               func background(_ enabled: Bool) async throws {
+          -        if enabled && !observers.isEmpty {
+          -            for type in types.compactMap({ $0 as? HKSampleType }) {
+          -                try await store.enableBackgroundDelivery(for: type, frequency: .immediate)
+          -            }
+          -            UserDefaults.standard.set(true, forKey: "healthBackground")
+          -            return
+          -        }
+          -        observers.forEach { store.stop($0) }; observers.removeAll()
+                   guard enabled else {
+          +            inventory.stopObserver()
+                       try await store.disableAllBackgroundDelivery()
+          +            observers.forEach { store.stop($0) }; observers.removeAll()
+                       UserDefaults.standard.set(false, forKey: "healthBackground")
+                       return
+                   }
+                   installObservers()
+          +        inventory.installObserver()
+          +        var firstError: Error?
+          +        var registered = false
+                   for type in types.compactMap({ $0 as? HKSampleType }) {
+          -            try await store.enableBackgroundDelivery(for: type, frequency: .immediate)
+          -        }
+          -        UserDefaults.standard.set(true, forKey: "healthBackground")
+          +            do {
+          +                try await store.enableBackgroundDelivery(for: type, frequency: .immediate)
+          +                registered = true
+          +            } catch { if firstError == nil { firstError = error } }
+          +        }
+          +        if !registered, let firstError { throw firstError }
+          +        UserDefaults.standard.set(registered, forKey: "healthBackground")
+          +        if let firstError { syncMessage = "部分健康指标等待后台权限：\(firstError.localizedDescription)" }
+               }
+               func restoreObserversOnLaunch() {
+          -        if UserDefaults.standard.bool(forKey: "healthBackground") { installObservers() }
+          +        if UserDefaults.standard.bool(forKey: "healthBackground") { installObservers(); inventory.installObserver() }
+               }
+               private func installObservers() {
+                   guard observers.isEmpty else { return }
+          @@ -130,9 +178,16 @@
+                       let query = HKObserverQuery(sampleType: type, predicate: nil) { [weak self] _, completion, error in
+                           guard error == nil else { completion(); return }
+                           Task { @MainActor [weak self] in
+          -                    if type.identifier == HKCategoryTypeIdentifier.sleepAnalysis.rawValue { self?.sleepCacheUpdatedAt = nil }
+          -                    await self?.refresh(upload: false)
+          -                    await self?.syncPending()
+          +                    guard let self else { completion(); return }
+          +                    self.observedChanges += 1
+          +                    if type.identifier != HKQuantityTypeIdentifier.stepCount.rawValue &&
+          +                        type.identifier != HKQuantityTypeIdentifier.heartRateVariabilitySDNN.rawValue {
+          +                        self.sleepCacheUpdatedAt = nil
+          +                    }
+          +                    await self.refresh(upload: false)
+          +                    await self.syncPending()
+          +                    self.inventory.schedule()
+          +                    LocationService.shared.refreshWeatherFromHealthDelivery()
+                               completion() // HealthKit is acknowledged even when the phone has no network.
+                           }
+                       }
+          --- a/Sources/App/NativeHealthSync.swift
+          +++ b/Sources/App/NativeHealthSync.swift
+          @@ -13,15 +13,29 @@
+               }
+           }
+           
+          +struct SleepNight: Codable {
+          +    let start: Date
+          +    let end: Date
+          +    let minutes: Double
+          +    var payload: [String: Any] {
+          +        let format = ISO8601DateFormatter()
+          +        return ["start_at": format.string(from: start), "end_at": format.string(from: end), "minutes": minutes]
+          +    }
+          +}
+          +
+           struct NativeHealthSnapshot: Codable {
+               let enabled: Bool
+               let collectedAt: Date
+               let readings: [HealthReading]
+               var sleepDetails: SleepDetails? = nil
+          +    var recentSleep: [SleepNight]? = nil
+          +    var timeZone: String? = nil
+               var payload: [String: Any] {
+                   var value: [String: Any] = ["enabled": enabled, "collected_at": ISO8601DateFormatter().string(from: collectedAt),
+                    "samples": readings.map(\.payload)]
+                   if let sleepDetails { value["sleep_details"] = sleepDetails.payload }
+          +        if let recentSleep { value["recent_sleep"] = recentSleep.map(\.payload) }
+          +        if let timeZone { value["time_zone"] = timeZone }
+                   return value
+               }
+               var contentData: Data? {
+          @@ -33,18 +47,23 @@
+           extension HealthService {
+               var snapshotForChat: [String: Any] {
+                   let enabled = UserDefaults.standard.bool(forKey: "healthAutoSync")
+          -        var value = NativeHealthSnapshot(enabled: enabled, collectedAt: Date(), readings: enabled ? readings : [],
+          -            sleepDetails: enabled ? sleepDetails : nil).payload
+          -        if enabled { value["recent_sleep"] = recentSleep }
+          +        var value = makeSnapshot(enabled: enabled).payload
+          +        value["sharing_configured"] = sharingChoice != nil
+                   return value
+               }
+          +    private func makeSnapshot(enabled: Bool) -> NativeHealthSnapshot {
+          +        let includesSleep = enabled && readings.contains { $0.id == "sleep" }
+          +        return .init(enabled: enabled, collectedAt: Date(), readings: enabled ? readings : [],
+          +                     sleepDetails: includesSleep ? sleepDetails : nil,
+          +                     recentSleep: includesSleep ? recentSleep : nil, timeZone: TimeZone.current.identifier)
+          +    }
+               func queueSnapshot(enabled: Bool) {
+          -        pendingSnapshot = .init(enabled: enabled, collectedAt: Date(), readings: enabled ? readings : [],
+          -            sleepDetails: enabled ? sleepDetails : nil)
+          +        pendingSnapshot = makeSnapshot(enabled: enabled)
+                   try? PrivateFiles.save(pendingSnapshot, "health-pending.json")
+               }
+               func setAutomaticSharing(_ enabled: Bool) async throws {
+                   if enabled { try await authorize() }
+          +        else { inventory.pause() }
+                   UserDefaults.standard.set(enabled, forKey: "healthAutoSync")
+                   queueSnapshot(enabled: enabled)
+                   if enabled {
+          @@ -57,19 +76,21 @@
+                   if UserDefaults.standard.bool(forKey: "healthAutoSync") { await refresh(upload: false) }
+               }
+               func syncPending() async {
+          -        guard !syncing, let snapshot = pendingSnapshot else { return }
+          +        guard !syncing else { return }
+          +        guard let snapshot = pendingSnapshot else { inventory.schedule(); return }
+                   guard let base = UserDefaults.standard.string(forKey: "gatewayURL"), !SecureToken.read().isEmpty else {
+                       syncMessage = "等手机配对并解锁后自动同步"; return
+                   }
+                   let encoded = snapshot.contentData
+          REVIEWED_CHUNK
+      - name: Stage reviewed Swift changes 2
+        shell: bash
+        run: |
+          cat >> "$RUNNER_TEMP/notification.patch" <<'REVIEWED_CHUNK'
+                   if snapshot.enabled && encoded == lastSyncedSamples {
+          -            pendingSnapshot = nil; try? PrivateFiles.save(pendingSnapshot, "health-pending.json"); return
+          +            pendingSnapshot = nil; try? PrivateFiles.save(pendingSnapshot, "health-pending.json"); inventory.schedule(); return
+                   }
+                   syncing = true; defer { syncing = false }
+                   let background = UIApplication.shared.beginBackgroundTask(withName: "LokiHealthSync", expirationHandler: nil)
+                   defer { if background != .invalid { UIApplication.shared.endBackgroundTask(background) } }
+                   do {
+                       _ = try await MobileAPI(base: base, token: SecureToken.read()).data("/v1/health", snapshot.payload, timeout: 8)
+          +            if snapshot.enabled { inventory.schedule() }
+                       lastSyncedSamples = snapshot.enabled ? encoded : nil
+                       lastSyncedAt = Date(); UserDefaults.standard.set(lastSyncedAt, forKey: "healthLastSync")
+                       syncMessage = snapshot.enabled ? "已自动同步给 Loki；使用原始采样时间" : "已暂停向 Loki 分享健康数据"
+          @@ -77,6 +98,7 @@
+                           pendingSnapshot = nil; try? PrivateFiles.save(pendingSnapshot, "health-pending.json")
+                       } else { Task { await syncPending() } }
+                   } catch {
+          +            if pendingSnapshot?.collectedAt != snapshot.collectedAt { Task { await syncPending() } }
+                       syncMessage = "等待下次联网同步：\(error.localizedDescription)"
+                   }
+               }
+          @@ -96,32 +118,37 @@
+                       HKCategoryValueSleepAnalysis.asleepCore.rawValue, HKCategoryValueSleepAnalysis.asleepDeep.rawValue,
+                       HKCategoryValueSleepAnalysis.asleepREM.rawValue]
+                   let all = raw.filter { asleep.contains($0.value) && $0.endDate > $0.startDate }
+          -        let watch = all.filter { ($0.sourceRevision.productType ?? "").hasPrefix("Watch") || ($0.device?.model ?? "").localizedCaseInsensitiveContains("watch") }
+          -        let samples = watch.isEmpty ? all : watch
+          +        func fromWatch(_ sample: HKSample) -> Bool {
+          +            (sample.sourceRevision.productType ?? "").hasPrefix("Watch") ||
+          +                (sample.device?.model ?? "").localizedCaseInsensitiveContains("watch")
+          +        }
+          +        let watchIntervals = all.filter(fromWatch).map { SleepIntervals.Interval(start: $0.startDate, end: $0.endDate) }
+          +        let watchSessions = SleepIntervals.sessions(watchIntervals)
+          +        let samples = all.filter { sample in
+          +            fromWatch(sample) || !watchSessions.contains { $0.start < sample.endDate && $0.end > sample.startDate }
+          +        }
+                   let intervals = samples.map { SleepIntervals.Interval(start: $0.startDate, end: $0.endDate) }
+          -        let format = ISO8601DateFormatter()
+          -        let daily = Dictionary(grouping: SleepIntervals.sessions(intervals), by: { Calendar.current.startOfDay(for: $0.end) })
+                   let calendar = Calendar.current
+          +        let nights = SleepIntervals.mainSessionsByDay(intervals, calendar: calendar)
+          +        let daily = Dictionary(uniqueKeysWithValues: nights.map { (calendar.startOfDay(for: $0.end), $0) })
+                   let today = calendar.startOfDay(for: .now)
+                   var segment = 0
+                   sleepTrend = (-6...0).compactMap { offset in
+                       guard let date = calendar.date(byAdding: .day, value: offset, to: today) else { return nil }
+          -            let value = daily[date]?.max(by: { $0.duration < $1.duration }).map { $0.duration / 3600 }
+          +            let value = daily[date].map { $0.duration / 3600 }
+                       defer { if value == nil { segment += 1 } }
+                       return HealthDay(date: date, value: value, segment: segment)
+                   }
+          -        recentSleep = daily.keys.sorted().suffix(7).compactMap { day -> [String: Any]? in
+          -            guard let value = daily[day]?.max(by: { $0.duration < $1.duration }), value.duration >= 3 * 3600 else { return nil }
+          -            return ["start_at": format.string(from: value.start), "end_at": format.string(from: value.end),
+          -                    "minutes": value.duration / 60]
+          +        recentSleep = nights.suffix(7).map { night in
+          +            SleepNight(start: night.start, end: night.end, minutes: night.duration / 60)
+                   }
+          -        guard let session = SleepIntervals.mainSession(intervals) else {
+          +        guard let session = nights.last else {
+                       sleepDetails = nil; cachedSleepReading = nil; sleepCacheUpdatedAt = Date(); return nil
+                   }
+                   let sources = Array(Set(samples.filter { $0.endDate >= session.start && $0.startDate <= session.end }
+                       .map { $0.sourceRevision.source.name })).sorted().joined(separator: "、")
+          -        let allWatch = raw.filter { ($0.sourceRevision.productType ?? "").hasPrefix("Watch") || ($0.device?.model ?? "").localizedCaseInsensitiveContains("watch") }
+          -        let detailSource = watch.isEmpty ? raw : allWatch
+          +        let watchNight = watchSessions.contains { $0.start < session.end && $0.end > session.start }
+          +        let detailSource = watchNight ? raw.filter(fromWatch) : raw
+                   let names = [HKCategoryValueSleepAnalysis.asleepDeep.rawValue: "deep", HKCategoryValueSleepAnalysis.asleepCore.rawValue: "core",
+                       HKCategoryValueSleepAnalysis.asleepREM.rawValue: "rem", HKCategoryValueSleepAnalysis.awake.rawValue: "awake",
+                       HKCategoryValueSleepAnalysis.asleepUnspecified.rawValue: "unspecified"]
+          @@ -129,10 +156,42 @@
+                       guard let stage = names[sample.value], sample.endDate > sample.startDate else { return nil }
+                       return .init(stage: stage, startAt: sample.startDate, endAt: sample.endDate)
+                   }
+          -        sleepDetails = SleepStageTimeline.build(details, session: session, source: String(sources.prefix(160)))
+          +        let timeline = SleepStageTimeline.build(details, session: session, source: String(sources.prefix(160)))
+          +        async let heart = nightVital(.heartRate, details: timeline)
+          +        async let breathing = nightVital(.respiratoryRate, details: timeline)
+          +        async let wrist = nightVital(.appleSleepingWristTemperature, details: timeline)
+          +        let measurements = await (heart, breathing, wrist)
+          +        var night = timeline
+          +        night.vitals = ["sleeping_heart_rate": measurements.0, "respiratory_rate": measurements.1,
+          +                        "wrist_temperature": measurements.2].compactMapValues { $0 }
+          +        sleepDetails = night
+                   let reading = HealthReading(id: "sleep", title: "最近主要睡眠（已记录时长）", value: session.duration / 60, unit: "分钟",
+                       recordedAt: session.end, source: String(sources.prefix(160)), startAt: session.start, endAt: session.end)
+                   cachedSleepReading = reading; sleepCacheUpdatedAt = Date()
+                   return reading
+               }
+          +
+          +    private func nightVital(_ identifier: HKQuantityTypeIdentifier, details: SleepDetails) async -> SleepVital? {
+          +        guard let type = HKQuantityType.quantityType(forIdentifier: identifier) else { return nil }
+          +        let temperature = identifier == .appleSleepingWristTemperature
+          +        let unit: HKUnit = temperature ? .degreeCelsius() : HKUnit.count().unitDivided(by: .minute())
+          +        let label = temperature ? "°C" : identifier == .heartRate ? "bpm" : "breaths/min"
+          +        let predicate = HKQuery.predicateForSamples(withStart: details.startAt, end: details.endAt)
+          +        let values: [Double] = await withCheckedContinuation { continuation in
+          +            let query = HKSampleQuery(sampleType: type, predicate: predicate, limit: HKObjectQueryNoLimit,
+          +                                      sortDescriptors: nil) { _, samples, _ in
+          +                let quantities = (samples as? [HKQuantitySample] ?? []).filter { sample in
+          +                    temperature
+          +                        ? details.overlapsNightlyTemperature(from: sample.startDate, to: sample.endDate)
+          +                        : details.includesAsleepSample(from: sample.startDate, to: sample.endDate)
+          +                }
+          +                // Prefer the sleep tracker's source when another app mirrors the same measurements.
+          +                let watch = quantities.filter { ($0.sourceRevision.productType ?? "").hasPrefix("Watch") ||
+          +                    ($0.device?.model ?? "").localizedCaseInsensitiveContains("watch") }
+          +                continuation.resume(returning: (watch.isEmpty ? quantities : watch).map { $0.quantity.doubleValue(for: unit) })
+          +            }
+          +            store.execute(query)
+          +        }
+          +        return SleepVital(values, unit: label)
+          +    }
+           }
+          --- a/Sources/App/SleepDetails.swift
+          +++ b/Sources/App/SleepDetails.swift
+          @@ -1,4 +1,22 @@
+           import Foundation
+          +
+          +struct SleepVital: Codable {
+          +    let mean: Double
+          +    let min: Double
+          +    let max: Double
+          +    let count: Int
+          +    let unit: String
+          +    init?(_ values: [Double], unit: String) {
+          +        let values = values.filter(\.isFinite)
+          +        guard let low = values.min(), let high = values.max() else { return nil }
+          +        self.min = low; self.max = high; self.count = values.count
+          +        self.mean = values.reduce(0, +) / Double(values.count)
+          +        self.unit = unit
+          +    }
+          +    var payload: [String: Any] {
+          +        ["mean": mean, "min": min, "max": max, "count": count, "unit": unit]
+          +    }
+          +}
+           
+           struct SleepStagePeriod: Codable, Identifiable {
+               let stage: String
+          @@ -18,6 +36,20 @@
+               let source: String
+               let periods: [SleepStagePeriod]
+               let followingAwake: SleepStagePeriod?
+          +    var vitals: [String: SleepVital]?
+          +    func includesAsleepSample(from start: Date, to end: Date) -> Bool {
+          +        guard start >= startAt, end <= endAt, start <= end else { return false }
+          +        let overlap = periods.filter { period in
+          +            period.endAt > start && (start == end ? period.startAt <= start : period.startAt < end)
+          +        }
+          +        return !overlap.isEmpty && overlap.allSatisfy { ["core", "deep", "rem", "unspecified"].contains($0.stage) }
+          +    }
+          +    func overlapsNightlyTemperature(from start: Date, to end: Date) -> Bool {
+          +        // Apple Watch supplies one aggregate for the night, which can span awake stages.
+          +        if start == end { return start >= startAt && start <= endAt }
+          +        let overlap = Swift.min(endAt, end).timeIntervalSince(Swift.max(startAt, start))
+          +        return end > start && overlap > 0 && overlap >= end.timeIntervalSince(start) / 2
+          +    }
+               static let stageOrder = ["deep", "core", "rem", "awake", "unspecified", "unrecorded", "conflicting"]
+               static func title(_ stage: String) -> String {
+                   ["deep": "深睡", "core": "核心睡眠", "rem": "快速眼动睡眠", "awake": "中途清醒记录",
+          @@ -28,6 +60,7 @@
+                   var result: [String: Any] = ["start_at": format.string(from: startAt), "end_at": format.string(from: endAt),
+                       "source": source, "periods": periods.filter { $0.duration >= 1 }.map(\.payload)]
+                   if let followingAwake, followingAwake.duration >= 1 { result["following_awake"] = followingAwake.payload }
+          +        if let vitals, !vitals.isEmpty { result["vitals"] = vitals.mapValues(\.payload) }
+                   return result
+               }
+           }
+          --- a/Sources/App/SleepIntervals.swift
+          +++ b/Sources/App/SleepIntervals.swift
+          @@ -4,8 +4,16 @@
+               struct Interval { let start: Date; let end: Date }
+               struct Session { let start: Date; let end: Date; let duration: TimeInterval }
+               static func mainSession(_ input: [Interval]) -> Session? {
+          -        let values = sessions(input)
+          -        return values.last(where: { $0.duration >= 3 * 3600 }) ?? values.last
+          +        mainSessionsByDay(input).last
+          +    }
+          +    static func mainSessionsByDay(_ input: [Interval], calendar: Calendar = .current) -> [Session] {
+          +        let daily = Dictionary(grouping: sessions(input), by: { calendar.startOfDay(for: $0.end) })
+          +        return daily.keys.sorted().compactMap { day in
+          +            guard let candidates = daily[day] else { return nil }
+          +            let morningEnd = calendar.date(bySettingHour: 10, minute: 0, second: 0, of: day) ?? day
+          +            let nights = candidates.filter { $0.start < morningEnd && $0.end >= day }
+          +            return (nights.isEmpty ? candidates : nights).max { $0.duration < $1.duration }
+          +        }
+               }
+               static func sessions(_ input: [Interval]) -> [Session] {
+                   let sorted = input.filter { $0.end > $0.start }.sorted { $0.start < $1.start }
+          --- a/Sources/App/AppState.swift
+          +++ b/Sources/App/AppState.swift
+          @@ -783,6 +783,7 @@
+                           return (defaults.object(forKey: "hrvCompanionEnabled") as? Bool ?? true) && defaults.bool(forKey: "healthAutoSync")
+                       }
+                       if id.hasPrefix("weather:") { return defaults.bool(forKey: "weatherCompanionEnabled") }
+          +            if id.hasPrefix("sleep:") { return defaults.bool(forKey: "healthAutoSync") }
+                       return true
+                   }
+               }
+          --- a/Sources/App/ChatView.swift
+          +++ b/Sources/App/ChatView.swift
+          @@ -418,6 +418,7 @@
+               private var careLabel: (title: String, icon: String)? {
+                   guard let event = message.careEventID else { return nil }
+                   if event.hasPrefix("hrv:") || event.hasPrefix("hrv-dnd:") { return ("HRV 关心", "heart") }
+          +        if event.hasPrefix("sleep:") { return ("醒来问候", "sunrise") }
+                   if event.hasPrefix("weather:") { return ("天气关心", "cloud.sun") }
+                   return nil
+               }
+          --- a/Sources/App/LokiApp.swift
+          +++ b/Sources/App/LokiApp.swift
+          @@ -54,7 +54,7 @@
+                           if value != .active { app.leftForeground() }
+                           if value == .active {
+                               app.restoreProtectedChat()
+          REVIEWED_CHUNK
+      - name: Stage reviewed Swift changes 3
+        shell: bash
+        run: |
+          cat >> "$RUNNER_TEMP/notification.patch" <<'REVIEWED_CHUNK'
+          -                    LocationService.shared.restoreAutomatic()
+          +                    LocationService.shared.resumeSharing()
+                               focus.refresh(); alarms.refresh()
+                               Task {
+                                   await notifications.refresh()
+          @@ -71,9 +71,16 @@
+                       }
+                       .onReceive(NotificationCenter.default.publisher(for: UIApplication.protectedDataDidBecomeAvailableNotification)) { _ in
+                           app.restoreProtectedChat()
+          +                if UserDefaults.standard.bool(forKey: "healthAutoSync") {
+          +                    Task { await health.refresh() }
+          +                }
+                       }
+                       .onChange(of: app.unlocked) { _, value in
+                           if value { Task { await alarms.autoSyncCourses(api: app.api); await app.syncWallpaperReceipt(); await app.refreshCompanion(voice: voice) } }
+          +            }
+          +            .task(id: app.paired && app.unlocked && phase == .active) {
+          +                guard app.paired && app.unlocked && phase == .active else { return }
+          +                await health.reviewSharingOnForeground()
+                       }
+                       .onChange(of: voice.playing || voice.recording) { _, value in music.voiceSpeaking(value) }
+                       .onChange(of: voice.recording || call.active) { _, value in CompanionInteraction.shared.setRecording(value) }
+          --- a/Sources/App/HealthView.swift
+          +++ b/Sources/App/HealthView.swift
+          @@ -251,10 +251,17 @@
+               var body: some View {
+                   Form {
+                       Section("Apple 健康") {
+          -                Button("读取已授权的数据", systemImage: "heart.text.clipboard") {
+          +                Button("查看 Apple 健康读取权限", systemImage: "heart.text.clipboard") {
+                               Task { do { try await health.authorize() } catch { app.tell(error) } }
+                           }.disabled(health.busy)
+                           Text(health.message).font(.caption).foregroundStyle(.secondary)
+          +                Button("选择可分享的药物与单项记录") {
+          +                    Task { do { try await health.inventory.requestSelections() } catch { app.tell(error) } }
+          +                }
+          +                Button("授权临床健康记录") {
+          +                    Task { do { try await health.inventory.requestClinical() } catch { app.tell(error) } }
+          +                }
+          +
+                       }
+                       Section("更新与分享") {
+                           Toggle("自动同步已授权的数据给 Loki", isOn: Binding(get: { autoSync }, set: { value in
+          @@ -266,6 +273,7 @@
+                           Text("后台更新由系统与手表同步决定。页面保留实际采样时间。")
+                               .font(.caption).foregroundStyle(.secondary)
+                           Text(health.syncMessage).font(.caption).foregroundStyle(.secondary)
+          +                HealthArchiveProgress(inventory: health.inventory)
+                           if let synced = health.lastSyncedAt { Text("最近同步：\(synced.formatted())").font(.caption) }
+                           Button("现在刷新并同步") { Task { await health.refresh(); await health.syncPending() } }
+                               .disabled(health.busy || !autoSync || !app.paired)
+          @@ -282,3 +290,16 @@
+                   .navigationTitle("数据与分享")
+               }
+           }
+          +
+          +
+          +private struct HealthArchiveProgress: View {
+          +    @ObservedObject var inventory: NativeHealthInventory
+          +    var body: some View {
+          +        VStack(alignment: .leading, spacing: 3) {
+          +            if !inventory.counts.isEmpty { Text(inventory.counts) }
+          +            if !inventory.progress.isEmpty { Text(inventory.progress) }
+          +        }
+          +        .font(.caption).foregroundStyle(.secondary)
+          +        .task { await inventory.refreshCounts(force: true) }
+          +    }
+          +}
+          --- a/Sources/App/LocationService.swift
+          +++ b/Sources/App/LocationService.swift
+          @@ -17,6 +17,10 @@
+               private var weather: LocalWeather?
+               private var syncing = false
+               private var lastUploaded: CLLocation?
+          +    private var lastUploadedForecast: Date?
+          +    private var lastForecastAttempt: Date?
+          +    private var pendingUploadRetry: Task<Void, Never>?
+          +    private var uploadFailures = 0
+               private var trackingEpoch = UUID()
+               private let manager = CLLocationManager()
+               override init() {
+          @@ -39,7 +43,28 @@
+               func enableWeather() {
+                   UserDefaults.standard.set(true, forKey: "weatherCompanionEnabled")
+                   UserDefaults.standard.set(true, forKey: "locationAutoSync")
+          -        locate(); restoreAutomatic()
+          +        lastForecastAttempt = nil
+          +        resumeSharing()
+          +        if manager.authorizationStatus != .authorizedAlways && manager.authorizationStatus != .authorizedWhenInUse { locate() }
+          +    }
+          +    func resumeSharing() {
+          +        restoreAutomatic()
+          +        guard UserDefaults.standard.bool(forKey: "locationAutoSync"),
+          +              UserDefaults.standard.bool(forKey: "weatherCompanionEnabled"),
+          +              manager.authorizationStatus == .authorizedAlways || manager.authorizationStatus == .authorizedWhenInUse else { return }
+          +        if let stamp = lastUploadedForecast, Calendar.current.isDateInToday(stamp),
+          +           Date().timeIntervalSince(stamp) < 3600 { return }
+          +        // A stationary phone can resume without a significant-location-change callback.
+          +        if let fix = position, LocationFreshness.usable(timestamp: fix.timestamp, accuracy: fix.horizontalAccuracy) {
+          +            Task { await uploadAutomatic(fix) }
+          +        } else {
+          +            manager.requestLocation()
+          +        }
+          +    }
+          +    func refreshWeatherFromHealthDelivery() {
+          +        guard manager.authorizationStatus == .authorizedAlways,
+          +              UserDefaults.standard.bool(forKey: "weatherCompanionEnabled") else { return }
+          +        resumeSharing()
+               }
+               func requestAlways() {
+                   UserDefaults.standard.set(true, forKey: "locationAutoSync")
+          @@ -48,7 +73,11 @@
+                   restoreAutomatic()
+               }
+               func stopAutomatic() {
+          +        pendingUploadRetry?.cancel(); pendingUploadRetry = nil
+          +        uploadFailures = 0
+                   trackingEpoch = UUID()
+          +        lastUploadedForecast = nil
+          +        lastForecastAttempt = nil
+                   UserDefaults.standard.set(false, forKey: "locationAutoSync")
+                   UserDefaults.standard.set(false, forKey: "weatherCompanionEnabled")
+                   manager.stopUpdatingLocation(); manager.stopMonitoringSignificantLocationChanges(); weather = nil
+          @@ -74,6 +103,7 @@
+                           else { self.manager.requestLocation() }
+                           self.restoreAutomatic()
+                       } else if status == .denied || status == .restricted {
+          +                self.pendingUploadRetry?.cancel(); self.pendingUploadRetry = nil
+                           self.trackingEpoch = UUID(); self.position = nil; self.places = []
+                           self.finishAllLocations(.failure(LokiError.message("定位权限未开启，请在系统设置中允许 Loki 定位。")))
+                       }
+          @@ -98,28 +128,68 @@
+                         manager.authorizationStatus == .authorizedAlways || manager.authorizationStatus == .authorizedWhenInUse,
+                         abs(location.timestamp.timeIntervalSinceNow) < 300, (0...1000).contains(location.horizontalAccuracy),
+                         let base = UserDefaults.standard.string(forKey: "gatewayURL"), !SecureToken.read().isEmpty else { return }
+          +        let wantsWeather = UserDefaults.standard.bool(forKey: "weatherCompanionEnabled")
+          +        let weatherDue = wantsWeather && (lastUploadedForecast.map {
+          +            !Calendar.current.isDateInToday($0) || Date().timeIntervalSince($0) >= 3600
+          +        } ?? true)
+                   if let lastUploaded, location.timestamp.timeIntervalSince(lastUploaded.timestamp) < 30,
+          -           location.distance(from: lastUploaded) < 100 { return }
+          +           location.distance(from: lastUploaded) < 100, !weatherDue { return }
+                   syncing = true; defer { syncing = false }
+                   let epoch = trackingEpoch
+                   var payload: [String: Any] = ["enabled": true, "latitude": location.coordinate.latitude,
+                       "longitude": location.coordinate.longitude, "accuracy_m": location.horizontalAccuracy,
+                       "recorded_at": location.timestamp.timeIntervalSince1970]
+          -        if UserDefaults.standard.bool(forKey: "weatherCompanionEnabled") {
+          +        if wantsWeather {
+                       do {
+          -                if weather == nil || Date().timeIntervalSince(weather!.fetchedAt) > 3600 || location.distance(from: weather!.location) > 5000 {
+          +                var forecast = weather.flatMap { cached -> LocalWeather? in
+          +                    guard Calendar.current.isDateInToday(cached.fetchedAt),
+          +                          Date().timeIntervalSince(cached.fetchedAt) < 3600,
+          +                          location.distance(from: cached.location) < 5000 else { return nil }
+          +                    return cached
+          +                }
+          +                if forecast == nil, lastForecastAttempt.map({ Date().timeIntervalSince($0) >= 30 }) ?? true {
+          +                    lastForecastAttempt = Date()
+                               let refreshed = try await LocalWeather.fetch(at: location)
+                               guard epoch == trackingEpoch && UserDefaults.standard.bool(forKey: "locationAutoSync") else { return }
+                               weather = refreshed
+          +                    forecast = refreshed
+                           }
+          -                if let weather { payload["weather"] = weather.payload; weatherMessage = "当地天气已同步给 Loki · Open-Meteo" }
+          +                if let forecast { payload["weather"] = forecast.payload }
+                       } catch { weatherMessage = "位置可同步；天气等待下次更新：\(error.localizedDescription)" }
+                   }
+                   guard epoch == trackingEpoch && UserDefaults.standard.bool(forKey: "locationAutoSync") else { return }
+                   do {
+          -            _ = try await MobileAPI(base: base, token: SecureToken.read()).data("/v1/location", payload, timeout: 8)
+          +            struct Receipt: Decodable { let stored: Bool }
+          +            let reply = try await MobileAPI(base: base, token: SecureToken.read()).data("/v1/location", payload, timeout: 8)
+          +            guard epoch == trackingEpoch, try JSONDecoder().decode(Receipt.self, from: reply).stored else { return }
+                       lastUploaded = location
+          -        } catch { message = "位置等待下次联网同步" }
+          +            uploadFailures = 0
+          +            pendingUploadRetry?.cancel(); pendingUploadRetry = nil
+          +            if payload["weather"] != nil {
+          +                lastUploadedForecast = weather?.fetchedAt
+          +                weatherMessage = "当地天气已同步给 Loki · Open-Meteo"
+          +            }
+          +        } catch {
+          +            message = "位置等待下次联网同步"
+          +            if payload["weather"] != nil { weatherMessage = "天气已取得，等待同步给 Loki" }
+          +            scheduleUploadRetry(epoch)
+          +        }
+          +    }
+          +    private func scheduleUploadRetry(_ epoch: UUID) {
+          +        guard pendingUploadRetry == nil, uploadFailures < 4 else { return }
+          +        uploadFailures += 1
+          +        let delay = [15, 45, 120, 240][uploadFailures - 1]
+          +        pendingUploadRetry = Task { @MainActor [weak self] in
+          +            do { try await Task.sleep(for: .seconds(delay)) } catch { return }
+          +            guard let self else { return }
+          +            self.pendingUploadRetry = nil
+          +            guard self.trackingEpoch == epoch, UserDefaults.standard.bool(forKey: "locationAutoSync") else { return }
+          +            if let fix = self.position, LocationFreshness.usable(timestamp: fix.timestamp, accuracy: fix.horizontalAccuracy) {
+          +                await self.uploadAutomatic(fix)
+          +            } else {
+          +                self.manager.requestLocation()
+          +            }
+          +        }
+               }
+               nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+                   let detail = error.localizedDescription
+          --- /dev/null
+          +++ b/Tests/SleepWakeHealth/main.swift
+          @@ -0,0 +1,42 @@
+          +import Foundation
+          +
+          +var calendar = Calendar(identifier: .gregorian)
+          +calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+          +let day = Date(timeIntervalSince1970: 86_400 * 20_000)
+          +func at(_ hour: Double) -> Date { day.addingTimeInterval(hour * 3600) }
+          +func interval(_ a: Double, _ b: Double) -> SleepIntervals.Interval { .init(start: at(a), end: at(b)) }
+          +func stage(_ kind: String, _ a: Double, _ b: Double) -> SleepStagePeriod {
+          +    .init(stage: kind, startAt: at(a), endAt: at(b))
+          +}
+          +
+          +let nights = SleepIntervals.mainSessionsByDay([
+          +    interval(-26, -17), interval(-1, 0.5), interval(0.75, 1.25), interval(13, 14)
+          +], calendar: calendar)
+          +precondition(nights.count == 2)
+          +let night = nights.last!
+          +precondition(night.start == at(-1) && night.end == at(1.25))
+          +precondition(night.duration == 2 * 3600, "A short night beats yesterday’s longer sleep and today’s later nap")
+          +let daySleep = SleepIntervals.mainSessionsByDay([interval(11, 15), interval(20, 20.5)], calendar: calendar)
+          +precondition(daySleep.last?.end == at(15), "Keep a daytime principal sleep when that is what was recorded")
+          +
+          +var details = SleepStageTimeline.build([
+          +    stage("core", -1, 0), stage("rem", 0, 0.5), stage("awake", 0.5, 0.6),
+          +    stage("awake", 0.6, 0.75), stage("deep", 0.75, 1.25), stage("awake", 1.25, 1.4)
+          +], session: night, source: "Fixture")
+          +precondition(details.periods.filter { $0.stage == "awake" }.count == 1 && details.followingAwake != nil)
+          +precondition(details.includesAsleepSample(from: at(-0.1), to: at(0.1)))
+          +precondition(!details.includesAsleepSample(from: at(0.4), to: at(0.8)))
+          +precondition(!details.includesAsleepSample(from: at(1.25), to: at(1.25)))
+          +precondition(details.includesAsleepSample(from: at(0.75), to: at(0.75)))
+          REVIEWED_CHUNK
+      - name: Stage reviewed Swift changes 4
+        shell: bash
+        run: |
+          cat >> "$RUNNER_TEMP/notification.patch" <<'REVIEWED_CHUNK'
+          +precondition(details.overlapsNightlyTemperature(from: at(-1.1), to: at(1.5)))
+          +precondition(!details.overlapsNightlyTemperature(from: at(-25), to: at(-0.99)))
+          +precondition(SleepVital([], unit: "bpm") == nil)
+          +let heart = SleepVital([60, 75, 54], unit: "bpm")!
+          +precondition(heart.mean == 63 && heart.min == 54 && heart.max == 75 && heart.count == 3)
+          +let old = try JSONEncoder().encode(details)
+          +let decoded = try JSONDecoder().decode(SleepDetails.self, from: old)
+          +precondition(decoded.vitals == nil)
+          +details.vitals = ["sleeping_heart_rate": heart]
+          +let wire = details.payload["vitals"] as! [String: [String: Any]]
+          +precondition(wire["sleeping_heart_rate"]?["unit"] as? String == "bpm" && wire["wrist_temperature"] == nil)
+          +print("Sleep selection, awake episodes, night-only measurements and legacy decoding passed")
+          --- /dev/null
+          +++ b/Sources/App/HealthArchiveSpecial.swift
+          @@ -0,0 +1,157 @@
+          +import Foundation
+          +import HealthKit
+          +
+          +@MainActor
+          +enum HealthArchiveSpecial {
+          +    static var sampleTypes: [HKSampleType] {
+          +        [
+          +            HKObjectType.workoutType(), HKSeriesType.workoutRoute(), HKSeriesType.heartbeat(),
+          +            HKObjectType.electrocardiogramType(), HKObjectType.audiogramSampleType(),
+          +            HKObjectType.visionPrescriptionType(), HKObjectType.stateOfMindType(),
+          +            HKScoredAssessmentType(.GAD7), HKScoredAssessmentType(.PHQ9), HKObjectType.medicationDoseEventType()
+          +        ]
+          +    }
+          +
+          +    static var clinicalTypes: [HKSampleType] {
+          +        let ids: [HKClinicalTypeIdentifier] = [.allergyRecord, .conditionRecord, .immunizationRecord,
+          +            .labResultRecord, .medicationRecord, .procedureRecord, .vitalSignRecord, .coverageRecord, .clinicalNoteRecord]
+          +        return ids.compactMap { HKObjectType.clinicalType(forIdentifier: $0) }
+          +    }
+          +
+          +    static func encode(_ sample: HKSample, store: HKHealthStore,
+          +                       emit: ([[String: Any]]) async throws -> Void) async throws -> [String: Any] {
+          +        switch sample {
+          +        case let r as HKClinicalRecord: return try await HealthArchiveSeries.clinical(r, emit: emit)
+          +        case let r as HKElectrocardiogram: return try await HealthArchiveSeries.ecg(r, store: store, emit: emit)
+          +        case let r as HKHeartbeatSeriesSample: return try await HealthArchiveSeries.heartbeat(r, store: store, emit: emit)
+          +        case let r as HKWorkoutRoute: return try await HealthArchiveSeries.route(r, store: store, emit: emit)
+          +        case let r as HKWorkout: return try await workout(r, emit: emit)
+          +        case let r as HKVisionPrescription: return vision(r)
+          +        case let r as HKAudiogramSample: return try await audiogram(r, emit: emit)
+          +        case let r as HKStateOfMind:
+          +            return ["kind": "state_of_mind", "value": r.valence, "details": [
+          +                "valence": r.valence, "kind": r.kind.rawValue, "classification": r.valenceClassification.rawValue,
+          +                "labels": r.labels.map(\.rawValue), "associations": r.associations.map(\.rawValue)]]
+          +        case let r as HKGAD7Assessment:
+          +            return ["kind": "assessment", "value": r.score, "details": [
+          +                "score": r.score, "risk": r.risk.rawValue, "answers": r.answers.map(\.rawValue)]]
+          +        case let r as HKPHQ9Assessment:
+          +            return ["kind": "assessment", "value": r.score, "details": [
+          +                "score": r.score, "risk": r.risk.rawValue, "answers": r.answers.map(\.rawValue)]]
+          +        case let r as HKMedicationDoseEvent:
+          +            var fields: [String: Any] = ["log_status": r.logStatus.rawValue, "schedule_type": r.scheduleType.rawValue,
+          +                                         "unit": r.unit.unitString]
+          +            fields["scheduled_at"] = r.scheduledDate?.ISO8601Format()
+          +            fields["taken_quantity"] = r.doseQuantity
+          +            fields["scheduled_quantity"] = r.scheduledDoseQuantity
+          +            fields["medication_id"] = try NativeHealthInventory.medicationKey(r.medicationConceptIdentifier)
+          +            return ["kind": "medication", "details": fields]
+          +        default: return [:]
+          +        }
+          +    }
+          +
+          +    private static func eyes(_ specification: HKLensSpecification?) -> [String: Any]? {
+          +        guard let lens = specification else { return nil }
+          +        var result: [String: Any] = ["sphere_dpt": lens.sphere.doubleValue(for: .diopter())]
+          +        result["cylinder_dpt"] = lens.cylinder?.doubleValue(for: .diopter())
+          +        result["axis_degrees"] = lens.axis?.doubleValue(for: .degreeAngle())
+          +        result["add_dpt"] = lens.addPower?.doubleValue(for: .diopter())
+          +        let mm = HKUnit.meterUnit(with: .milli)
+          +        if let lens = lens as? HKGlassesLensSpecification {
+          +            result["vertex_mm"] = lens.vertexDistance?.doubleValue(for: mm)
+          +            result["far_pupillary_mm"] = lens.farPupillaryDistance?.doubleValue(for: mm)
+          +            result["near_pupillary_mm"] = lens.nearPupillaryDistance?.doubleValue(for: mm)
+          +            if let prism = lens.prism {
+          +                result["prism"] = ["eye": prism.eye.rawValue, "amount": prism.amount.doubleValue(for: .prismDiopter()),
+          +                                   "angle_degrees": prism.angle.doubleValue(for: .degreeAngle()),
+          +                                   "horizontal": prism.horizontalAmount.doubleValue(for: .prismDiopter()),
+          +                                   "vertical": prism.verticalAmount.doubleValue(for: .prismDiopter()),
+          +                                   "horizontal_base": prism.horizontalBase.rawValue, "vertical_base": prism.verticalBase.rawValue] as [String: Any]
+          +            }
+          +        }
+          +        if let lens = lens as? HKContactsLensSpecification {
+          +            result["base_curve_mm"] = lens.baseCurve?.doubleValue(for: mm)
+          +            result["diameter_mm"] = lens.diameter?.doubleValue(for: mm)
+          +        }
+          +        return result
+          +    }
+          +
+          +    private static func vision(_ r: HKVisionPrescription) -> [String: Any] {
+          +        var result: [String: Any] = ["date_issued": r.dateIssued.ISO8601Format(), "prescription_type": r.prescriptionType.rawValue]
+          +        result["expires_at"] = r.expirationDate?.ISO8601Format()
+          +        if let glasses = r as? HKGlassesPrescription {
+          +            result["left"] = eyes(glasses.leftEye)
+          +            result["right"] = eyes(glasses.rightEye)
+          +        } else if let contacts = r as? HKContactsPrescription {
+          +            result["brand"] = contacts.brand
+          +            result["left"] = eyes(contacts.leftEye)
+          +            result["right"] = eyes(contacts.rightEye)
+          +        }
+          +        return ["kind": "vision", "details": result]
+          +    }
+          +
+          +    private static func audiogram(_ r: HKAudiogramSample, emit: ([[String: Any]]) async throws -> Void) async throws -> [String: Any] {
+          +        let db = HKUnit.decibelHearingLevel()
+          +        for (index, point) in r.sensitivityPoints.enumerated() {
+          +            var details: [String: Any] = ["frequency_hz": point.frequency.doubleValue(for: .hertz())]
+          +            details["left_db_hl"] = point.leftEarSensitivity?.doubleValue(for: db)
+          +            details["right_db_hl"] = point.rightEarSensitivity?.doubleValue(for: db)
+          +            details["tests"] = point.tests.map { test -> [String: Any] in
+          +                var d: [String: Any] = ["db_hl": test.sensitivity.doubleValue(for: db), "side": test.side.rawValue,
+          +                                        "type": test.type.rawValue, "masked": test.masked]
+          +                if let range = test.clampingRange {
+          +                    d["lower_db_hl"] = range.lowerBound?.doubleValue(for: db)
+          +                    d["upper_db_hl"] = range.upperBound?.doubleValue(for: db)
+          +                }
+          +                return d
+          +            }
+          +            try await emit([HealthArchiveParts.child(r, series: "audiogram", index: index, details: details)])
+          +        }
+          +        return ["kind": "audiogram", "details": ["points": r.sensitivityPoints.count]]
+          +    }
+          +
+          +    private static func statistics(_ values: [HKQuantityType: HKStatistics]) -> [[String: Any]] {
+          +        values.map { type, stat -> [String: Any] in
+          +            var result: [String: Any] = ["type": type.identifier]
+          +            if type.aggregationStyle == .cumulative {
+          +                result["sum"] = stat.sumQuantity()?.description
+          +            } else {
+          +                result["minimum"] = stat.minimumQuantity()?.description
+          +                result["maximum"] = stat.maximumQuantity()?.description
+          +                result["average"] = stat.averageQuantity()?.description
+          +            }
+          +            return result
+          +        }.sorted { ($0["type"] as? String ?? "") < ($1["type"] as? String ?? "") }
+          +    }
+          +
+          +    private static func workout(_ r: HKWorkout, emit: ([[String: Any]]) async throws -> Void) async throws -> [String: Any] {
+          +        let events = r.workoutEvents ?? []
+          +        let activities = r.workoutActivities
+          +        var details: [String: Any] = ["activity_type": r.workoutActivityType.rawValue, "duration_s": r.duration,
+          +                                      "events_count": events.count, "activities_count": activities.count,
+          +                                      "statistics": statistics(r.allStatistics)]
+          +        details["distance_m"] = r.totalDistance?.doubleValue(for: .meter())
+          +        details["energy_kcal"] = r.totalEnergyBurned?.doubleValue(for: .kilocalorie())
+          +        details["strokes"] = r.totalSwimmingStrokeCount?.doubleValue(for: .count())
+          +        details["flights"] = r.totalFlightsClimbed?.doubleValue(for: .count())
+          +        for first in stride(from: 0, to: events.count, by: 40) {
+          +            let last = min(first + 40, events.count)
+          +            try await emit(events[first..<last].enumerated().map { offset, event in
+          +                HealthArchiveParts.child(r, series: "workout_event", index: first + offset,
+          +                    details: ["event_type": event.type.rawValue, "start": event.dateInterval.start.ISO8601Format(),
+          +                              "end": event.dateInterval.end.ISO8601Format()])
+          +            })
+          +        }
+          +        for (index, activity) in activities.enumerated() {
+          +            let cfg = activity.workoutConfiguration
+          +            var activityDetails: [String: Any] = ["activity_uuid": activity.uuid.uuidString.lowercased(),
+          +                "activity_type": cfg.activityType.rawValue, "location_type": cfg.locationType.rawValue,
+          +                "swimming_location": cfg.swimmingLocationType.rawValue, "start": activity.startDate.ISO8601Format(),
+          +                "duration_s": activity.duration, "statistics": statistics(activity.allStatistics)]
+          +            activityDetails["end"] = activity.endDate?.ISO8601Format()
+          +            activityDetails["lap_m"] = cfg.lapLength?.doubleValue(for: .meter())
+          +            try await emit([HealthArchiveParts.child(r, series: "workout_activity", index: index, details: activityDetails)])
+          +        }
+          +        return ["kind": "workout", "details": details]
+          +    }
+          +}
+          --- /dev/null
+          +++ b/Sources/App/HealthArchiveSeries.swift
+          @@ -0,0 +1,152 @@
+          +import Foundation
+          +import HealthKit
+          +import CoreLocation
+          +import CryptoKit
+          +
+          +/// Indices identify immutable HealthKit sample contents across interrupted uploads.
+          +enum HealthArchiveParts {
+          +    static func id(parent: UUID, series: String, index: Int) -> String {
+          +        let seed = "\(parent.uuidString.lowercased())/\(series)/\(index)"
+          +        var bytes = Array(SHA256.hash(data: Data(seed.utf8)).prefix(16))
+          +        bytes[6] = (bytes[6] & 0x0f) | 0x80
+          +        bytes[8] = (bytes[8] & 0x3f) | 0x80
+          +        let hex = bytes.map { String(format: "%02x", $0) }.joined()
+          +        let lengths = [8, 4, 4, 4, 12]
+          +        var cursor = hex.startIndex
+          +        return lengths.map { length in
+          +            let end = hex.index(cursor, offsetBy: length)
+          +            defer { cursor = end }
+          +            return String(hex[cursor..<end])
+          +        }.joined(separator: "-")
+          +    }
+          +
+          +    @MainActor
+          +    static func child(_ sample: HKSample, series: String, index: Int, details: [String: Any]) -> [String: Any] {
+          +        var row = NativeHealthInventory.baseRecord(sample)
+          +        row["id"] = id(parent: sample.uuid, series: series, index: index)
+          +        row["kind"] = series == "fhir" ? "clinical" : "series"
+          +        var attributes = details
+          +        attributes["parent_id"] = sample.uuid.uuidString.lowercased()
+          +        attributes["series"] = series
+          +        attributes["index"] = index
+          +        row["details"] = attributes
+          +        return row
+          +    }
+          +}
+          +
+          +@MainActor
+          +enum HealthArchiveSeries {
+          +    typealias Emit = ([[String: Any]]) async throws -> Void
+          +    private static func consume<S: AsyncSequence>(_ series: S, sample: HKSample, name: String, columns: [String],
+          +                                                  pointsPerPage: Int, emit: Emit,
+          +                                                  map: (S.Element) -> [Any]) async throws -> Int {
+          +        var points = [[Any]]()
+          +        var count = 0
+          +        var page = 0
+          +        for try await point in series {
+          +            try Task.checkCancellation()
+          +            points.append(map(point))
+          +            count += 1
+          +            if points.count == pointsPerPage {
+          +                try await emit([HealthArchiveParts.child(sample, series: name, index: page,
+          +                                                       details: ["columns": columns, "points": points])])
+          +                points.removeAll(keepingCapacity: true)
+          +                page += 1
+          +            }
+          +        }
+          +        try Task.checkCancellation()
+          +        if !points.isEmpty {
+          REVIEWED_CHUNK
+      - name: Stage reviewed Swift changes 5
+        shell: bash
+        run: |
+          cat >> "$RUNNER_TEMP/notification.patch" <<'REVIEWED_CHUNK'
+          +            try await emit([HealthArchiveParts.child(sample, series: name, index: page,
+          +                                                   details: ["columns": columns, "points": points])])
+          +        }
+          +        return count
+          +    }
+          +
+          +    static func ecg(_ sample: HKElectrocardiogram, store: HKHealthStore, emit: Emit) async throws -> [String: Any] {
+          +        let series = HKElectrocardiogramQueryDescriptor(sample).results(for: store)
+          +        let count = try await consume(series, sample: sample, name: "ecg_lead_i", columns: ["offset_s", "mV"],
+          +                                      pointsPerPage: 200, emit: emit) { point in
+          +            let voltage = point.quantity(for: .appleWatchSimilarToLeadI)?.doubleValue(for: .voltUnit(with: .milli))
+          +            let value: Any = voltage.flatMap { $0.isFinite ? $0 : nil }.map { $0 as Any } ?? NSNull()
+          +            return [point.timeSinceSampleStart, value]
+          +        }
+          +        var fields: [String: Any] = ["classification": sample.classification.rawValue, "symptoms_status": sample.symptomsStatus.rawValue,
+          +                                      "points": count, "expected_points": sample.numberOfVoltageMeasurements]
+          +        fields["sampling_hz"] = sample.samplingFrequency?.doubleValue(for: .hertz())
+          +        fields["average_bpm"] = sample.averageHeartRate?.doubleValue(for: HKUnit.count().unitDivided(by: .minute()))
+          +        return ["kind": "ecg", "details": fields]
+          +    }
+          +
+          +    static func route(_ sample: HKWorkoutRoute, store: HKHealthStore, emit: Emit) async throws -> [String: Any] {
+          +        let columns = ["unix_s", "latitude", "longitude", "altitude_m", "horizontal_accuracy_m", "vertical_accuracy_m",
+          +                       "speed_m_s", "course_degrees", "speed_accuracy_m_s", "course_accuracy_degrees"]
+          +        let series = HKWorkoutRouteQueryDescriptor(sample).results(for: store)
+          +        let count = try await consume(series, sample: sample, name: "workout_route", columns: columns,
+          +                                      pointsPerPage: 65, emit: emit) { p in
+          +            [p.timestamp.timeIntervalSince1970, p.coordinate.latitude, p.coordinate.longitude, p.altitude,
+          +             p.horizontalAccuracy, p.verticalAccuracy, p.speed, p.course, p.speedAccuracy, p.courseAccuracy]
+          +                .map { $0.isFinite ? $0 as Any : NSNull() }
+          +        }
+          +        return ["kind": "route", "details": ["points": count]]
+          +    }
+          +
+          +    static func heartbeat(_ sample: HKHeartbeatSeriesSample, store: HKHealthStore, emit: Emit) async throws -> [String: Any] {
+          +        let series = HKHeartbeatSeriesQueryDescriptor(sample).results(for: store)
+          +        let count = try await consume(series, sample: sample, name: "heartbeat", columns: ["offset_s", "preceded_by_gap"],
+          +                                      pointsPerPage: 240, emit: emit) { point in
+          +            [point.timeIntervalSinceStart, point.precededByGap]
+          +        }
+          +        return ["kind": "heartbeat", "details": ["points": count, "expected_points": sample.count]]
+          +    }
+          +
+          +    static func quantity(_ sample: HKQuantitySample, unit: HKUnit, store: HKHealthStore, emit: Emit) async throws -> Int {
+          +        let predicate = HKSamplePredicate.quantitySample(type: sample.quantityType,
+          +                                                         predicate: HKQuery.predicateForObject(with: sample.uuid))
+          +        let series = HKQuantitySeriesSampleQueryDescriptor(predicate: predicate,
+          +                                                           options: .orderByQuantitySampleStartDate).results(for: store)
+          +        return try await consume(series, sample: sample, name: "quantity_series", columns: ["start_unix_s", "end_unix_s", unit.unitString],
+          +                                 pointsPerPage: 140, emit: emit) { reading in
+          +            let raw = reading.quantity.doubleValue(for: unit)
+          +            let value = unit == .percent() ? raw * 100 : raw
+          +            return [reading.dateInterval.start.timeIntervalSince1970, reading.dateInterval.end.timeIntervalSince1970,
+          +                    value.isFinite ? value as Any : NSNull()]
+          +        }
+          +    }
+          +
+          +    static func clinical(_ sample: HKClinicalRecord, emit: Emit) async throws -> [String: Any] {
+          +        var details: [String: Any] = ["display_name": sample.displayName]
+          +        guard let fhir = sample.fhirResource else { return ["kind": "clinical", "details": details] }
+          +        let data = fhir.data
+          +        details["resource_type"] = fhir.resourceType.rawValue
+          +        details["resource_id"] = fhir.identifier
+          +        details["fhir_version"] = fhir.fhirVersion.stringRepresentation
+          +        details["bytes"] = data.count
+          +        details["sha256"] = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+          +        // A readable clinical summary lives alongside the complete, byte-exact resource.
+          +        if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+          +            for name in ["status", "effectiveDateTime", "issued", "date", "recordedDate", "onsetDateTime", "valueString"] {
+          +                if let text = object[name] as? String { details[name] = String(text.prefix(1024)) }
+          +            }
+          +            if let code = object["code"] as? [String: Any] {
+          +                let coding = (code["coding"] as? [[String: Any]])?.first
+          +                details["code_display"] = ((code["text"] ?? coding?["display"]) as? String).map { String($0.prefix(1024)) }
+          +            }
+          +            if let quantity = object["valueQuantity"] as? [String: Any] {
+          +                details["value"] = quantity["value"] as? NSNumber
+          +                details["unit"] = quantity["unit"] as? String
+          +            }
+          +        }
+          +        let chunk = 7200
+          +        var index = 0
+          +        for start in stride(from: 0, to: data.count, by: chunk) {
+          +            try Task.checkCancellation()
+          +            let end = min(start + chunk, data.count)
+          +            try await emit([HealthArchiveParts.child(sample, series: "fhir", index: index,
+          +                                                    details: ["encoding": "base64", "offset": start,
+          +                                                              "data": data.subdata(in: start..<end).base64EncodedString()])])
+          +            index += 1
+          +        }
+          +        details["parts"] = index
+          +        return ["kind": "clinical", "details": details]
+          +    }
+          +}
+          --- /dev/null
+          +++ b/Sources/App/HealthArchiveCatalog.swift
+          @@ -0,0 +1,164 @@
+          +import Foundation
+          +import HealthKit
+          +
+          +// HealthKit's public identifiers, grouped by their export units. Unknown identifiers on
+          +// older OS versions resolve to nil. The source store never receives a write request.
+          +enum HealthArchiveCatalog {
+          +    private static func words(_ text: String) -> [String] {
+          +        text.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+          +    }
+          +    private static let quantities: [(String, String)] = [
+          +        ("degC", """
+          +        AppleSleepingWristTemperature WaterTemperature BasalBodyTemperature BodyTemperature
+          +        """),
+          +        ("%", """
+          +        BodyFatPercentage AtrialFibrillationBurden PeripheralPerfusionIndex AppleWalkingSteadiness
+          +        WalkingAsymmetryPercentage WalkingDoubleSupportPercentage BloodAlcoholContent OxygenSaturation
+          +        """),
+          +        ("kg", """
+          +        BodyMass LeanBodyMass
+          +        """),
+          +        ("count", """
+          +        BodyMassIndex FlightsClimbed NikeFuel PushCount StepCount SwimmingStrokeCount
+          +        NumberOfAlcoholicBeverages NumberOfTimesFallen AppleSleepingBreathingDisturbances InhalerUsage
+          +        UVExposure
+          +        """),
+          +        ("S", """
+          +        ElectrodermalActivity
+          +        """),
+          +        ("m", """
+          +        Height WaistCircumference DistanceCrossCountrySkiing DistanceCycling DistanceDownhillSnowSports
+          +        DistancePaddleSports DistanceRowing DistanceSkatingSports DistanceSwimming DistanceWalkingRunning
+          +        DistanceWheelchair UnderwaterDepth RunningStrideLength SixMinuteWalkTestDistance WalkingStepLength
+          +        HipCircumference
+          +        """),
+          +        ("kcal", """
+          +        ActiveEnergyBurned BasalEnergyBurned DietaryEnergyConsumed
+          +        """),
+          +        ("min", """
+          +        AppleExerciseTime AppleMoveTime AppleStandTime TimeInDaylight
+          +        """),
+          +        ("m/s", """
+          +        CrossCountrySkiingSpeed CyclingSpeed PaddleSportsSpeed RowingSpeed RunningSpeed StairAscentSpeed
+          +        StairDescentSpeed WalkingSpeed
+          +        """),
+          +        ("count/min", """
+          +        CyclingCadence HeartRateRecoveryOneMinute RestingHeartRate WalkingHeartRateAverage HeartRate
+          +        RespiratoryRate
+          +        """),
+          +        ("W", """
+          +        CyclingFunctionalThresholdPower CyclingPower RunningPower
+          +        """),
+          +        ("appleEffortScore", """
+          +        EstimatedWorkoutEffortScore WorkoutEffortScore
+          +        """),
+          +        ("kcal/(kg*hr)", """
+          +        PhysicalEffort
+          +        """),
+          +        ("dBASPL", """
+          +        EnvironmentalAudioExposure EnvironmentalSoundReduction HeadphoneAudioExposure
+          +        """),
+          +        ("ms", """
+          +        HeartRateVariabilitySDNN RunningGroundContactTime HeartRateVariabilityRMSSD
+          +        """),
+          +        ("cm", """
+          +        RunningVerticalOscillation
+          +        """),
+          +        ("g", """
+          +        DietaryBiotin DietaryCaffeine DietaryCalcium DietaryCarbohydrates DietaryChloride DietaryCholesterol
+          +        DietaryChromium DietaryCopper DietaryFatMonounsaturated DietaryFatPolyunsaturated
+          +        DietaryFatSaturated DietaryFatTotal DietaryFiber DietaryFolate DietaryIodine DietaryIron
+          +        DietaryMagnesium DietaryManganese DietaryMolybdenum DietaryNiacin DietaryPantothenicAcid
+          +        DietaryPhosphorus DietaryPotassium DietaryProtein DietaryRiboflavin DietarySelenium DietarySodium
+          +        DietarySugar DietaryThiamin DietaryVitaminA DietaryVitaminB12 DietaryVitaminB6 DietaryVitaminC
+          +        DietaryVitaminD DietaryVitaminE DietaryVitaminK DietaryZinc
+          +        """),
+          +        ("mL", """
+          +        DietaryWater
+          +        """),
+          +        ("mmHg", """
+          +        BloodPressureDiastolic BloodPressureSystolic
+          +        """),
+          +        ("IU", """
+          +        InsulinDelivery
+          +        """),
+          +        ("L", """
+          +        ForcedExpiratoryVolume1 ForcedVitalCapacity
+          +        """),
+          +        ("L/min", """
+          +        PeakExpiratoryFlowRate
+          +        """),
+          +        ("mg/dL", """
+          +        BloodGlucose
+          +        """),
+          +        ("mL/(kg*min)", """
+          +        VO2Max
+          +        """),
+          +    ]
+          +    private static let categoryNames = """
+          +    AppleStandHour EnvironmentalAudioExposureEvent HeadphoneAudioExposureEvent HighHeartRateEvent
+          +    IrregularHeartRhythmEvent LowCardioFitnessEvent LowHeartRateEvent MindfulSession
+          +    AppleWalkingSteadinessEvent HandwashingEvent ToothbrushingEvent BleedingAfterPregnancy
+          +    BleedingDuringPregnancy CervicalMucusQuality Contraceptive InfrequentMenstrualCycles
+          +    IntermenstrualBleeding IrregularMenstrualCycles Lactation MenstrualFlow OvulationTestResult
+          +    PersistentIntermenstrualBleeding Pregnancy PregnancyTestResult ProgesteroneTestResult
+          +    ProlongedMenstrualPeriods SexualActivity SleepApneaEvent SleepAnalysis AbdominalCramps Acne
+          +    AppetiteChanges BladderIncontinence Bloating BreastPain ChestTightnessOrPain Chills Constipation
+          +    Coughing Diarrhea Dizziness DrySkin Fainting Fatigue Fever GeneralizedBodyAche HairLoss Headache
+          +    Heartburn HotFlashes LossOfSmell LossOfTaste LowerBackPain MemoryLapse MoodChanges Nausea
+          +    NightSweats PelvicPain RapidPoundingOrFlutteringHeartbeat RunnyNose ShortnessOfBreath
+          +    SinusCongestion SkippedHeartbeat SleepChanges SoreThroat VaginalDryness Vomiting Wheezing
+          +    AudioExposureEvent BleedingAfterMenopause HypertensionEvent MenopausalState
+          +    """
+          +    static let quantityUnits: [String: HKUnit] = {
+          +        var result: [String: HKUnit] = [:]
+          +        for (unit, names) in quantities {
+          +            let preferred: HKUnit
+          +            switch unit {
+          +            case "appleEffortScore": preferred = .appleEffortScore()
+          +            case "mg/dL": preferred = HKUnit.gramUnit(with: .milli).unitDivided(by: .literUnit(with: .deci))
+          +            case "mL/(kg*min)":
+          +                preferred = HKUnit.literUnit(with: .milli)
+          +                    .unitDivided(by: HKUnit.gramUnit(with: .kilo).unitMultiplied(by: .minute()))
+          +            case "kcal/(kg*hr)":
+          +                preferred = HKUnit.kilocalorie()
+          +                    .unitDivided(by: HKUnit.gramUnit(with: .kilo).unitMultiplied(by: .hour()))
+          +            default: preferred = HKUnit(from: unit)
+          +            }
+          +            for name in words(names) { result["HKQuantityTypeIdentifier" + name] = preferred }
+          +        }
+          +        return result
+          +    }()
+          +    static let characteristics = ["DateOfBirth", "BloodType", "BiologicalSex", "WheelchairUse",
+          +                                  "FitzpatrickSkinType", "ActivityMoveMode"].compactMap {
+          +        HKObjectType.characteristicType(forIdentifier: .init(rawValue: "HKCharacteristicTypeIdentifier" + $0))
+          +    }
+          +    static let correlations = [HKCorrelationTypeIdentifier.bloodPressure, .food].compactMap {
+          +        HKObjectType.correlationType(forIdentifier: $0)
+          +    }
+          +    static let ordinary: [HKSampleType] = {
+          +        let quantities: [HKSampleType] = quantityUnits.keys.compactMap {
+          +            HKObjectType.quantityType(forIdentifier: .init(rawValue: $0))
+          +        }
+          +        let categories: [HKSampleType] = words(categoryNames).compactMap {
+          +            HKObjectType.categoryType(forIdentifier: .init(rawValue: "HKCategoryTypeIdentifier" + $0))
+          +        }
+          +        return quantities + categories
+          +    }()
+          REVIEWED_CHUNK
+      - name: Stage reviewed Swift changes 6
+        shell: bash
+        run: |
+          cat >> "$RUNNER_TEMP/notification.patch" <<'REVIEWED_CHUNK'
+          +    static func characteristic(_ type: HKCharacteristicType, store: HKHealthStore) throws -> Any? {
+          +        let value: Int
+          +        switch type.identifier {
+          +        case HKCharacteristicTypeIdentifier.dateOfBirth.rawValue:
+          +            let date = try store.dateOfBirthComponents()
+          +            guard let year = date.year, let month = date.month, let day = date.day else { return nil }
+          +            return String(format: "%04d-%02d-%02d", year, month, day)
+          +        case HKCharacteristicTypeIdentifier.biologicalSex.rawValue: value = try store.biologicalSex().biologicalSex.rawValue
+          +        case HKCharacteristicTypeIdentifier.bloodType.rawValue: value = try store.bloodType().bloodType.rawValue
+          +        case HKCharacteristicTypeIdentifier.wheelchairUse.rawValue: value = try store.wheelchairUse().wheelchairUse.rawValue
+          +        case HKCharacteristicTypeIdentifier.fitzpatrickSkinType.rawValue: value = try store.fitzpatrickSkinType().skinType.rawValue
+          +        case HKCharacteristicTypeIdentifier.activityMoveMode.rawValue: value = try store.activityMoveMode().activityMoveMode.rawValue
+          +        default: return nil
+          +        }
+          +        return value
+          +    }
+          +}
+          --- /dev/null
+          +++ b/Sources/App/HealthArchiveSchedule.swift
+          @@ -0,0 +1,36 @@
+          +import Foundation
+          +
+          +/// Only anchors, work order and fingerprints live on disk; retries reread HealthKit.
+          +struct HealthArchiveSchedule: Codable {
+          +    var epoch: String
+          +    var boundary: Date
+          +    var queued: [String] = []
+          +    var anchors: [String: Data] = [:]
+          +    var fingerprints: [String: String] = [:]
+          +    var lastReconciliation: Date?
+          +    var activityDay: Date?
+          +    var knownStock: [String: [String]] = [:]
+          +
+          +    init(epoch: String, now: Date = .now) {
+          +        self.epoch = epoch
+          +        boundary = Calendar.current.date(byAdding: .day, value: -30, to: now) ?? now
+          +    }
+          +    static func lanes(_ type: String) -> [String] { ["recent:" + type, "past:" + type] }
+          +    mutating func register(_ types: [String], recheck: Bool) {
+          +        for prefix in ["recent:", "past:"] {
+          +            for type in types {
+          +                let key = prefix + type
+          +                if recheck || anchors[key] == nil { enqueue(key) }
+          +            }
+          +        }
+          +    }
+          +    mutating func enqueue(_ key: String) {
+          +        if !queued.contains(key) { queued.append(key) }
+          +    }
+          +    // Leave the page in durable work until the corresponding server transaction commits.
+          +    mutating func acknowledge(_ key: String, anchor: Data, hasMore: Bool) {
+          +        anchors[key] = anchor
+          +        queued.removeAll { $0 == key }
+          +        if hasMore { enqueue(key) }
+          +    }
+          +}
+          --- /dev/null
+          +++ b/Sources/App/NativeHealthInventory.swift
+          @@ -0,0 +1,495 @@
+          +import Foundation
+          +import HealthKit
+          +import CryptoKit
+          +import Combine
+          +import UIKit
+          +
+          +@MainActor final class NativeHealthInventory: ObservableObject {
+          +    @Published private(set) var counts = ""
+          +    @Published private(set) var progress = ""
+          +    private var lastCountCheck = Date.distantPast
+          +    private var retryAfter: [String: Date] = [:]
+          +    private struct ArchiveCounts: Decodable { let enabled: Bool; let record_count: Int?; let type_count: Int? }
+          +    func refreshCounts(force: Bool = false) async {
+          +        guard ready, let base = UserDefaults.standard.string(forKey: "gatewayURL"),
+          +              force || Date().timeIntervalSince(lastCountCheck) > 60 else { return }
+          +        let serial = revision
+          +        lastCountCheck = .now
+          +        do {
+          +            let data = try await MobileAPI(base: base, token: SecureToken.read()).data("/v1/health/archive/status", timeout: 8)
+          +            let status = try JSONDecoder().decode(ArchiveCounts.self, from: data)
+          +            try active(serial)
+          +            if status.enabled, let records = status.record_count, let types = status.type_count {
+          +                counts = "Loki 已收到 \(types) 类、\(records) 条健康记录"
+          +            } else { counts = "健康记录同步已暂停" }
+          +        } catch {
+          +            if counts.isEmpty { counts = "等待查询 Loki 已收到的记录数" }
+          +        }
+          +    }
+          +    private let store: HKHealthStore
+          +    private var state: HealthArchiveSchedule?
+          +    private var task: Task<Void, Never>?
+          +    private var registration: Task<Void, Never>?
+          +    private var observer: HKObserverQuery?
+          +    private var observerTypes: Set<String> = []
+          +    private var transientDirty: Set<String> = []
+          +    private var revision = 0
+          +    private var runAgain = false
+          +    private var lastAttempt = Date.distantPast
+          +    private var lastSync = Date.distantPast
+          +    private let file = "healthkit-archive-cursors-v1.json"
+          +    private let pageSize = 64
+          +    private var ready: Bool {
+          +        UserDefaults.standard.bool(forKey: "healthAutoSync") && UIApplication.shared.isProtectedDataAvailable
+          +    }
+          +    init(store: HKHealthStore) { self.store = store }
+          +
+          +    var regularReadTypes: Set<HKObjectType> {
+          +        var result = Set(HealthArchiveCatalog.ordinary.map { $0 as HKObjectType })
+          +        result.formUnion(HealthArchiveCatalog.characteristics.map { $0 as HKObjectType })
+          +        result.formUnion(HealthArchiveSpecial.sampleTypes.filter { !$0.requiresPerObjectAuthorization() }.map { $0 as HKObjectType })
+          +        result.insert(HKObjectType.activitySummaryType())
+          +        return result
+          +    }
+          +    var sampleTypes: [HKSampleType] {
+          +        var all = HealthArchiveCatalog.ordinary + HealthArchiveCatalog.correlations + HealthArchiveSpecial.sampleTypes
+          +        if UserDefaults.standard.bool(forKey: "healthArchiveClinical") { all += HealthArchiveSpecial.clinicalTypes }
+          +        var seen: Set<String> = []
+          +        return all.filter { seen.insert($0.identifier).inserted }
+          +    }
+          +    private func lookup() -> [String: HKSampleType] {
+          +        Dictionary(uniqueKeysWithValues: sampleTypes.map { ($0.identifier, $0) })
+          +    }
+          +    func requestClinical() async throws {
+          +        let types = Set(HealthArchiveSpecial.clinicalTypes.map { $0 as HKObjectType })
+          +        guard HKHealthStore.isHealthDataAvailable(), !types.isEmpty else { throw LokiError.message("当前设备不提供临床健康记录。") }
+          +        try await store.requestAuthorization(toShare: [], read: types)
+          +        UserDefaults.standard.set(true, forKey: "healthArchiveClinical")
+          +        resetAfterReview()
+          +    }
+          +    func requestSelections() async throws {
+          +        let medication = HKObjectType.userAnnotatedMedicationType()
+          +        var types: [HKObjectType] = HealthArchiveSpecial.sampleTypes.filter { $0.requiresPerObjectAuthorization() }
+          +        if !types.contains(medication) { types.append(medication) }
+          +        for type in types {
+          +            if type.requiresPerObjectAuthorization() {
+          +                try await store.requestPerObjectReadAuthorization(for: type, predicate: nil)
+          +            } else { try await store.requestAuthorization(toShare: [], read: [type]) }
+          +        }
+          +        UserDefaults.standard.set(true, forKey: "healthArchiveIndividual")
+          +        resetAfterReview()
+          +    }
+          +    func resetAfterReview() {
+          +        cancel()
+          +        state = nil
+          +        try? PrivateFiles.save(Optional<HealthArchiveSchedule>.none, file)
+          +        if UserDefaults.standard.bool(forKey: "healthBackground") { installObserver() }
+          +        schedule(force: true)
+          +    }
+          +    private func cancel() {
+          +        revision += 1
+          +        task?.cancel()
+          +        task = nil
+          +        runAgain = false
+          +    }
+          +    func pause() {
+          +        cancel()
+          +        stopObserver()
+          +        state = nil
+          +        transientDirty.removeAll()
+          +        retryAfter = [:]
+          +        counts = ""; progress = ""
+          +        try? PrivateFiles.save([String: Data](), "healthkit-medication-identities.json")
+          +        try? PrivateFiles.save(Optional<HealthArchiveSchedule>.none, file)
+          +    }
+          +    func stopObserver() {
+          +        registration?.cancel()
+          +        registration = nil
+          +        if let observer { store.stop(observer) }
+          +        observer = nil
+          +        observerTypes = []
+          +    }
+          +    func installObserver() {
+          +        guard ready else { return }
+          +        let types = sampleTypes
+          +        let ids = Set(types.map(\.identifier))
+          +        guard ids != observerTypes else { return }
+          +        stopObserver()
+          +        observerTypes = ids
+          +        let query = HKObserverQuery(queryDescriptors: types.map { HKQueryDescriptor(sampleType: $0, predicate: nil) }) {
+          +            [weak self] _, changed, complete, error in
+          +            Task { @MainActor in
+          +                guard let self, self.ready, error == nil else { complete(); return }
+          +                let ids = changed?.map(\.identifier) ?? []
+          +                self.transientDirty.formUnion(ids)
+          +                if self.state != nil {
+          +                    for id in ids {
+          +                        for key in HealthArchiveSchedule.lanes(id) { self.state?.enqueue(key) }
+          +                    }
+          +                    try? self.persist()
+          +                }
+          +                // The work survives process death in the anchors; protected data is retried on unlock.
+          +                complete()
+          +                self.schedule(force: true)
+          +            }
+          +        }
+          +        observer = query
+          +        store.execute(query)
+          +        registration = Task { [weak self] in
+          +            guard let self else { return }
+          +            for type in types {
+          +                guard !Task.isCancelled, self.ready else { return }
+          +                // The summary service registers its six time-sensitive types at immediate frequency.
+          +                let summaryIDs: Set<String> = [HKQuantityTypeIdentifier.heartRate.rawValue,
+          +                    HKQuantityTypeIdentifier.heartRateVariabilitySDNN.rawValue, HKQuantityTypeIdentifier.stepCount.rawValue,
+          +                    HKQuantityTypeIdentifier.respiratoryRate.rawValue, HKQuantityTypeIdentifier.appleSleepingWristTemperature.rawValue,
+          +                    HKCategoryTypeIdentifier.sleepAnalysis.rawValue]
+          +                if !summaryIDs.contains(type.identifier) {
+          +                    try? await self.store.enableBackgroundDelivery(for: type, frequency: .hourly)
+          +                }
+          +            }
+          +        }
+          +    }
+          +    func schedule(force: Bool = false) {
+          +        guard ready else { return }
+          +        if task != nil { if force { runAgain = true }; return }
+          +        guard force || Date().timeIntervalSince(lastAttempt) >= 45 else { return }
+          +        lastAttempt = .now
+          +        let serial = revision
+          +        task = Task { [weak self] in
+          +            guard let self else { return }
+          +            let more = await self.drain(serial: serial)
+          +            guard self.revision == serial else { return }
+          +            self.task = nil
+          +            let again = self.runAgain
+          +            self.runAgain = false
+          +            if more && (UIApplication.shared.applicationState == .active || again) {
+          +                // Let playback and interactive requests run between archive batches.
+          +                self.task = Task { [weak self] in
+          +                    try? await Task.sleep(nanoseconds: 600_000_000)
+          +                    guard let self, self.revision == serial, !Task.isCancelled else { return }
+          +                    self.task = nil
+          +                    self.schedule(force: true)
+          +                }
+          +            }
+          +        }
+          +    }
+          +    private func persist() throws { try PrivateFiles.save(state, file) }
+          +    private func active(_ serial: Int) throws {
+          +        guard ready, revision == serial, !Task.isCancelled else { throw CancellationError() }
+          +    }
+          +    private struct RemoteState: Decodable { let enabled: Bool; let epoch: String? }
+          +    private struct Receipt: Decodable { let stored: Bool }
+          +    private struct RemoteFailure: Error {}
+          +    private func drain(serial: Int) async -> Bool {
+          +        guard let base = UserDefaults.standard.string(forKey: "gatewayURL") else { return false }
+          +        let token = SecureToken.read()
+          +        guard !token.isEmpty else { return false }
+          +        let api = MobileAPI(base: base, token: token)
+          +        do {
+          +            let data = try await api.data("/v1/health/archive/state", timeout: 8)
+          +            let remote = try JSONDecoder().decode(RemoteState.self, from: data)
+          +            try active(serial)
+          +            guard remote.enabled, let epoch = remote.epoch, !epoch.isEmpty else { return false }
+          +            if state == nil { state = PrivateFiles.load(file, fallback: nil) }
+          +            let fresh = state?.epoch != epoch
+          +            if fresh { state = .init(epoch: epoch); lastSync = .distantPast; retryAfter = [:] }
+          +            retryAfter = retryAfter.filter { $0.value > Date() }
+          +            let types = lookup()
+          +            let priority = ["HKCategoryTypeIdentifierMenstrualFlow", "HKCategoryTypeIdentifierOvulationTestResult",
+          +                            "HKCategoryTypeIdentifierSleepAnalysis", "HKQuantityTypeIdentifierHeartRateVariabilitySDNN"]
+          +            let ids = priority.filter { types[$0] != nil } + types.keys.filter { !priority.contains($0) }.sorted()
+          +            let reconcile = Date().timeIntervalSince(state?.lastReconciliation ?? .distantPast) > 4 * 3600
+          +            state?.register(ids, recheck: reconcile)
+          +            if reconcile { state?.lastReconciliation = .now }
+          +            let dirty = transientDirty
+          +            transientDirty.removeAll()
+          +            for id in dirty { for key in HealthArchiveSchedule.lanes(id) { state?.enqueue(key) } }
+          +            try persist()
+          +            if Date().timeIntervalSince(lastSync) > 12 * 3600 {
+          +                try await snapshots(api: api, epoch: epoch, serial: serial)
+          +                lastSync = .now
+          +            }
+          REVIEWED_CHUNK
+      - name: Stage reviewed Swift changes 7
+        shell: bash
+        run: |
+          cat >> "$RUNNER_TEMP/notification.patch" <<'REVIEWED_CHUNK'
+          +            let ringsPending = await historicalRings(api: api, epoch: epoch, serial: serial)
+          +            let end = Date().addingTimeInterval(8)
+          +            var failed = Set(retryAfter.keys)
+          +            var processed = 0
+          +            while processed < 40, Date() < end, let key = state?.queued.first(where: { !failed.contains($0) }) {
+          +                try active(serial)
+          +                guard let split = key.firstIndex(of: ":"), let type = types[String(key[key.index(after: split)...])] else {
+          +                    state?.queued.removeAll { $0 == key }
+          +                    continue
+          +                }
+          +                do { try await page(type, key: key, api: api, epoch: epoch, serial: serial) }
+          +                catch is RemoteFailure { progress = "连接恢复后会从已确认的位置继续"; return false }
+          +                catch is CancellationError { return false }
+          +                catch {
+          +                    // One denied, unavailable or device-locked query cannot starve the others.
+          +                    state?.queued.removeAll { $0 == key }
+          +                    state?.enqueue(key)
+          +                    failed.insert(key)
+          +                    retryAfter[key] = Date().addingTimeInterval(1800)
+          +                }
+          +                processed += 1
+          +            }
+          +            try persist()
+          +            let pending = ringsPending || state?.queued.contains(where: { !failed.contains($0) }) == true
+          +            progress = pending ? "正在补收已授权的健康记录" : failed.isEmpty ? "已检查可读取的记录" : "已检查当前记录，部分类型稍后重试"
+          +            await refreshCounts()
+          +            return pending
+          +        } catch {
+          +            if ready, serial == revision { progress = "等待重试，同步会从已确认的位置继续" }
+          +            return false
+          +        }
+          +    }
+          +    struct Page {
+          +        let samples: [HKSample]
+          +        let deleted: [String]
+          +        let anchor: HKQueryAnchor
+          +    }
+          +    private func read(_ type: HKSampleType, key: String) async throws -> Page {
+          +        guard let state else { throw CancellationError() }
+          +        let recent = key.hasPrefix("recent:")
+          +        // Partition by startDate. No overlap, no lost straddling samples, one anchor per predicate.
+          +        let predicate = NSPredicate(format: recent ? "%K >= %@" : "%K < %@", HKPredicateKeyPathStartDate,
+          +                                    state.boundary as NSDate)
+          +        let anchor = try state.anchors[key].flatMap {
+          +            try NSKeyedUnarchiver.unarchivedObject(ofClass: HKQueryAnchor.self, from: $0)
+          +        }
+          +        return try await withCheckedThrowingContinuation { continuation in
+          +            let query = HKAnchoredObjectQuery(type: type, predicate: predicate, anchor: anchor, limit: pageSize) {
+          +                _, samples, deleted, next, error in
+          +                guard let next, error == nil else {
+          +                    continuation.resume(throwing: error ?? LokiError.message("健康记录的读取位置暂不可用。")); return
+          +                }
+          +                continuation.resume(returning: Page(samples: samples ?? [], deleted: (deleted ?? []).map {
+          +                    $0.uuid.uuidString.lowercased()
+          +                }, anchor: next))
+          +            }
+          +            store.execute(query)
+          +        }
+          +    }
+          +    private func page(_ type: HKSampleType, key: String, api: MobileAPI, epoch: String, serial: Int) async throws {
+          +        let page = try await read(type, key: key)
+          +        try active(serial)
+          +        let id = type.identifier
+          +        var records: [[String: Any]] = []
+          +        for sample in page.samples {
+          +            var row = Self.baseRecord(sample)
+          +            var details = Self.metadata(sample)
+          +            if let quantity = sample as? HKQuantitySample {
+          +                guard let unit = HealthArchiveCatalog.quantityUnits[id], quantity.quantity.is(compatibleWith: unit) else {
+          +                    throw LokiError.message("此健康指标的单位需要更新。")
+          +                }
+          +                row["kind"] = "quantity"
+          +                let measured = quantity.quantity.doubleValue(for: unit)
+          +                row["value"] = unit == HKUnit.percent() ? measured * 100 : measured
+          +                row["unit"] = unit.unitString
+          +                details["quantity_count"] = quantity.count
+          +            } else if let category = sample as? HKCategorySample {
+          +                row["kind"] = "category"; row["value"] = category.value
+          +            } else if let correlation = sample as? HKCorrelation {
+          +                row["kind"] = "correlation"
+          +                details["members"] = correlation.objects.sorted { $0.uuid.uuidString < $1.uuid.uuidString }.map { object in
+          +                    let memberType = object.sampleType.identifier
+          +                    var member: [String: Any] = ["id": object.uuid.uuidString.lowercased(), "type_id": memberType]
+          +                    if let quantity = object as? HKQuantitySample, let unit = HealthArchiveCatalog.quantityUnits[memberType],
+          +                       quantity.quantity.is(compatibleWith: unit) {
+          +                        let number = quantity.quantity.doubleValue(for: unit)
+          +                        member["value"] = unit == HKUnit.percent() ? number * 100 : number
+          +                        member["unit"] = unit.unitString
+          +                    }
+          +                    return member
+          +                }
+          +            } else {
+          +                let extra = try await HealthArchiveSpecial.encode(sample, store: store) { rows in
+          +                    try await self.upload(rows, deleted: [], type: id, api: api, epoch: epoch, serial: serial)
+          +                }
+          +                for (k, v) in extra where k != "details" { row[k] = v }
+          +                if let special = extra["details"] as? [String: Any] { details.merge(special) { _, new in new } }
+          +            }
+          +            if !details.isEmpty { row["details"] = details }
+          +            records.append(row)
+          +        }
+          +        if !records.isEmpty || !page.deleted.isEmpty {
+          +            try await upload(records, deleted: page.deleted, type: id, api: api, epoch: epoch, serial: serial)
+          +        }
+          +        try active(serial)
+          +        let blob = try NSKeyedArchiver.archivedData(withRootObject: page.anchor, requiringSecureCoding: true)
+          +        state?.acknowledge(key, anchor: blob, hasMore: page.samples.count + page.deleted.count >= pageSize)
+          +        // A write racing an observer callback gets a further (normally empty) anchored read.
+          +        if transientDirty.contains(id) { state?.enqueue(key) }
+          +        try persist()
+          +    }
+          +    private func upload(_ rows: [[String: Any]], deleted: [String], type: String, api: MobileAPI,
+          +                        epoch: String, serial: Int) async throws {
+          +        try active(serial)
+          +        let body: [String: Any] = ["schema": 1, "epoch": epoch, "enabled": true, "type_id": type, "records": rows,
+          +            "deleted": deleted, "time_zone": TimeZone.current.identifier, "collected_at": Self.timestamp(Date())]
+          +        do {
+          +            let data = try await api.data("/v1/health/archive", body, timeout: 18)
+          +            guard try JSONDecoder().decode(Receipt.self, from: data).stored else { throw RemoteFailure() }
+          +        } catch { throw RemoteFailure() }
+          +        try active(serial)
+          +    }
+          +    private static let iso: ISO8601DateFormatter = {
+          +        let f = ISO8601DateFormatter()
+          +        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+          +        return f
+          +    }()
+          +    static func timestamp(_ date: Date) -> String { iso.string(from: date) }
+          +    static func baseRecord(_ sample: HKSample) -> [String: Any] {
+          +        ["id": sample.uuid.uuidString.lowercased(), "type_id": sample.sampleType.identifier,
+          +         "start_at": timestamp(sample.startDate), "end_at": timestamp(sample.endDate),
+          +         "source": ["name": sample.sourceRevision.source.name, "bundle": sample.sourceRevision.source.bundleIdentifier]]
+          +    }
+          +    private static func metadata(_ sample: HKSample) -> [String: Any] {
+          +        var result: [String: Any] = [:]
+          +        let metadata = sample.metadata ?? [:]
+          +        if let marker = metadata[HKMetadataKeyMenstrualCycleStart] as? NSNumber { result["cycle_start"] = marker.boolValue }
+          +        if let tz = metadata[HKMetadataKeyTimeZone] as? String { result["time_zone"] = tz }
+          +        if let entered = metadata[HKMetadataKeyWasUserEntered] as? NSNumber { result["user_entered"] = entered.boolValue }
+          +        if let product = sample.sourceRevision.productType { result["product_type"] = product }
+          +        return result
+          +    }
+          +}
+          +
+          +// Non-sample HealthKit records use their own read APIs and stable local identities.
+          +extension NativeHealthInventory {
+          +    private static func uuid(from key: String) -> String {
+          +        var bytes = Array(SHA256.hash(data: Data(key.utf8)).prefix(16))
+          +        bytes[6] = (bytes[6] & 0x0f) | 0x80
+          +        bytes[8] = (bytes[8] & 0x3f) | 0x80
+          +        let id = bytes.withUnsafeBytes { $0.loadUnaligned(as: uuid_t.self) }
+          +        return UUID(uuid: id).uuidString.lowercased()
+          +    }
+          +    static func medicationKey(_ concept: HKHealthConceptIdentifier) throws -> String {
+          +        let file = "healthkit-medication-identities.json"
+          +        var identities: [String: Data] = PrivateFiles.load(file, fallback: [:])
+          +        for (key, bytes) in identities {
+          +            if let existing = try? NSKeyedUnarchiver.unarchivedObject(ofClass: HKHealthConceptIdentifier.self, from: bytes),
+          +               existing.isEqual(concept) { return key }
+          +        }
+          +        let key = UUID().uuidString.lowercased()
+          +        identities[key] = try NSKeyedArchiver.archivedData(withRootObject: concept, requiringSecureCoding: true)
+          +        try PrivateFiles.save(identities, file)
+          +        return key
+          +    }
+          +    private func snapshots(api: MobileAPI, epoch: String, serial: Int) async throws {
+          +        for type in HealthArchiveCatalog.characteristics {
+          +            guard let value = try? HealthArchiveCatalog.characteristic(type, store: store) else { continue }
+          +            let id = "characteristic:" + type.identifier
+          +            let row = projection(id: id, type: type.identifier, kind: "characteristic", value: value,
+          +                                 details: ["sample_time_known": false])
+          +            try await sendProjection([row], type: type.identifier, api: api, epoch: epoch, serial: serial)
+          +        }
+          +        if UserDefaults.standard.bool(forKey: "healthArchiveIndividual") {
+          +            // A read error (including a locked health store) must never delete the previous selection.
+          +            if let meds = try? await HKUserAnnotatedMedicationQueryDescriptor().result(for: store) {
+          +                try active(serial)
+          +                let type = HKObjectType.userAnnotatedMedicationType().identifier
+          +                var rows: [[String: Any]] = []
+          +                for med in meds {
+          +                    let concept = med.medication
+          +                    let id = try Self.medicationKey(concept.identifier)
+          +                    var details: [String: Any] = ["has_schedule": med.hasSchedule, "is_archived": med.isArchived,
+          +                        "general_form": concept.generalForm.rawValue, "medication_id": id,
+          +                        "codes": concept.relatedCodings.map { ["system": $0.system, "code": $0.code] }
+          +                            .sorted { $0["system", default: ""] + $0["code", default: ""] < $1["system", default: ""] + $1["code", default: ""] }]
+          +                    if let nickname = med.nickname { details["nickname"] = nickname }
+          +                    details["sample_time_known"] = false
+          +                    rows.append(projection(id: id, type: type, kind: "medication", value: concept.displayText, details: details))
+          +                }
+          +                let known = Set(state?.knownStock[type] ?? [])
+          +                let now = Set(rows.compactMap { $0["id"] as? String })
+          +                try await sendProjection(rows, type: type, deleted: Array(known.subtracting(now)), api: api, epoch: epoch, serial: serial)
+          +                state?.knownStock[type] = Array(now)
+          +            }
+          +        }
+          +        let today = Calendar.current.startOfDay(for: .now)
+          +        let start = Calendar.current.date(byAdding: .day, value: -6, to: today) ?? today
+          +        if let current = try? await rings(from: start, to: today) {
+          +            try await sendProjection(current, type: HKObjectType.activitySummaryType().identifier,
+          +                                     api: api, epoch: epoch, serial: serial)
+          +        }
+          +        try persist()
+          +    }
+          +    private func historicalRings(api: MobileAPI, epoch: String, serial: Int) async -> Bool {
+          +        do {
+          +            let calendar = Calendar.current
+          +            let end = state?.activityDay ?? calendar.startOfDay(for: .now)
+          +            let floor = calendar.startOfDay(for: store.earliestPermittedSampleDate())
+          +            guard end >= floor, let before = calendar.date(byAdding: .day, value: -92, to: end) else { return false }
+          +            let start = max(floor, before)
+          +            let result = try await rings(from: start, to: end)
+          +            try await sendProjection(result, type: HKObjectType.activitySummaryType().identifier, api: api, epoch: epoch, serial: serial)
+          +            try active(serial)
+          +            state?.activityDay = calendar.date(byAdding: .day, value: -1, to: start)
+          +            try persist()
+          +            return start > floor
+          +        } catch { return false }
+          +    }
+          +    private func rings(from start: Date, to end: Date) async throws -> [[String: Any]] {
+          REVIEWED_CHUNK
+      - name: Stage reviewed Swift changes 8
+        shell: bash
+        run: |
+          cat >> "$RUNNER_TEMP/notification.patch" <<'REVIEWED_CHUNK'
+          +        let calendar = Calendar.current
+          +        let keys: Set<Calendar.Component> = [.calendar, .era, .year, .month, .day]
+          +        let predicate = HKQuery.predicate(forActivitySummariesBetweenStart: calendar.dateComponents(keys, from: start),
+          +                                          end: calendar.dateComponents(keys, from: end))
+          +        let summaries: [HKActivitySummary] = try await withCheckedThrowingContinuation { continuation in
+          +            let query = HKActivitySummaryQuery(predicate: predicate) { _, summaries, error in
+          +                if let error { continuation.resume(throwing: error) }
+          +                else { continuation.resume(returning: summaries ?? []) }
+          +            }
+          +            store.execute(query)
+          +        }
+          +        let type = HKObjectType.activitySummaryType().identifier
+          +        return summaries.compactMap { summary in
+          +            let parts = summary.dateComponents(for: calendar)
+          +            guard let date = calendar.date(from: parts), let y = parts.year, let m = parts.month, let d = parts.day else { return nil }
+          +            let day = String(format: "%04d-%02d-%02d", y, m, d)
+          +            let calories = summary.activeEnergyBurned.doubleValue(for: .kilocalorie())
+          +            var details: [String: Any] = ["day": day, "active_kcal": calories,
+          +                "move_mode": summary.activityMoveMode.rawValue,
+          +                "active_goal_kcal": summary.activeEnergyBurnedGoal.doubleValue(for: .kilocalorie()),
+          +                "move_minutes": summary.appleMoveTime.doubleValue(for: .minute()),
+          +                "move_goal_minutes": summary.appleMoveTimeGoal.doubleValue(for: .minute()),
+          +                "exercise_minutes": summary.appleExerciseTime.doubleValue(for: .minute()),
+          +                "stand_hours": summary.appleStandHours.doubleValue(for: .count()), "is_paused": summary.isPaused]
+          +            if let goal = summary.exerciseTimeGoal { details["exercise_goal_minutes"] = goal.doubleValue(for: .minute()) }
+          +            if let goal = summary.standHoursGoal { details["stand_goal_hours"] = goal.doubleValue(for: .count()) }
+          +            var row = projection(id: Self.uuid(from: type + "/" + day), type: type, kind: "activity_summary",
+          +                                 value: calories, details: details)
+          +            row["unit"] = "kcal"
+          +            row["start_at"] = Self.timestamp(date)
+          +            row["end_at"] = Self.timestamp(min(Date(), calendar.date(byAdding: .day, value: 1, to: date) ?? date))
+          +            return row
+          +        }
+          +    }
+          +    private func projection(id: String, type: String, kind: String, value: Any, details: [String: Any]) -> [String: Any] {
+          +        let now = Self.timestamp(.now)
+          +        return ["id": id, "type_id": type, "kind": kind, "value": value, "start_at": now, "end_at": now,
+          +            "details": details, "source": ["name": "Apple Health", "bundle": "com.apple.Health"]]
+          +    }
+          +    private func sendProjection(_ rows: [[String: Any]], type: String, deleted: [String] = [], api: MobileAPI,
+          +                                epoch: String, serial: Int) async throws {
+          +        var changed: [[String: Any]] = []
+          +        var fingerprints: [String: String] = [:]
+          +        for row in rows {
+          +            guard let id = row["id"] as? String else { continue }
+          +            var stable = row
+          +            stable.removeValue(forKey: "start_at"); stable.removeValue(forKey: "end_at")
+          +            let json = try JSONSerialization.data(withJSONObject: stable, options: [.sortedKeys])
+          +            let digest = SHA256.hash(data: json).map { String(format: "%02x", $0) }.joined()
+          +            if state?.fingerprints[id] != digest {
+          +                fingerprints[id] = digest; changed.append(row)
+          +            }
+          +        }
+          +        guard !changed.isEmpty || !deleted.isEmpty else { return }
+          +        for start in stride(from: 0, to: max(1, changed.count), by: 80) {
+          +            let batch = Array(changed[start..<min(start + 80, changed.count)])
+          +            try await upload(batch, deleted: start == 0 ? deleted : [], type: type, api: api, epoch: epoch, serial: serial)
+          +        }
+          +        for (id, digest) in fingerprints { state?.fingerprints[id] = digest }
+          +        for id in deleted { state?.fingerprints.removeValue(forKey: id) }
+          +        try persist()
+          +    }
+          +}
+          REVIEWED_CHUNK
+      - name: Apply reviewed wake and health changes
+        working-directory: app-source
+        shell: bash
+        run: |
+          python3 - <<'SOURCE_BEFORE'
+          from hashlib import sha256
+          from pathlib import Path
+          before={'Sources/App/HealthService.swift': '849ab7ac7f5a64023910c818ee9b90af9857589126939ec145d1e0e7eafea2c9', 'Sources/App/NativeHealthSync.swift': '57ec2cf2d1180ce72c10d6263b9a9781c955891dc56e94df0a8d980510bbfd21', 'Sources/App/SleepDetails.swift': '5689837aa69324a3ded0c129b68bcb96981acde0f93bc308f73333d9a5f0c464', 'Sources/App/SleepIntervals.swift': 'ebb3bcf0c7823ebd37d02cb60791243d8a7cc7007b864a1f5393d93cf57f0e6f', 'Sources/App/AppState.swift': '16a80076886ddd2e73c90ec387e052666722a594d0b5252600ed29ae8dc878c5', 'Sources/App/ChatView.swift': '46bba294a6227f8d9add55bcec6717968cb237649fdd8979d4401c113cec0c41', 'Sources/App/LokiApp.swift': '152c117d894f5913341dc2703ee544205f032f612e9c6312cbd91ef92d32bcba', 'Sources/App/HealthView.swift': '253ed871c675f09a58ea8f0972fe5e92d1308f98dda9ec1c17ea1d7fae75091a', 'Sources/App/LocationService.swift': 'ddd4078728e8b326a775d6e041370ebb884dd962720d5bbd010fd2050e1ea48c'}
+          for name, expected in before.items():
+              p=Path(name)
+              data=p.read_bytes().replace(b'\r\n', b'\n')
+              assert sha256(data).hexdigest()==expected,name
+              p.write_bytes(data)
+          new_paths=['Sources/App/HealthArchiveCatalog.swift', 'Sources/App/HealthArchiveSchedule.swift', 'Sources/App/HealthArchiveSeries.swift', 'Sources/App/HealthArchiveSpecial.swift', 'Sources/App/NativeHealthInventory.swift', 'Tests/SleepWakeHealth/main.swift']
+          for name in new_paths:
+              assert not Path(name).exists(),name
+              Path(name).parent.mkdir(parents=True,exist_ok=True)
+          SOURCE_BEFORE
+          echo '4009db35669a561c0e808e25482dbd36f1a7f75179d8569a9e01d671ee882939  '$RUNNER_TEMP'/notification.patch' | shasum -a 256 -c -
+          patch --batch -p1 < "$RUNNER_TEMP/notification.patch"
+          shasum -a 256 -c <<'SOURCE_AFTER'
+          e2c6a457d27b4c4291c78b8fbf01ebe377be795b8df19b77b9c166bed8bd93bf  Sources/App/HealthService.swift
+          f34ba6ddbaa67d18b8a350464660c912d2995af218214e3690d9108e50730a7e  Sources/App/NativeHealthSync.swift
+          db551c8e0544714022c100e884577e6b352a6535968d373be22c1242cc2df54f  Sources/App/SleepDetails.swift
+          2b00c307b6f7b0fdebd7c8c11ad7a8df1236c4e18f6d404d194db497453d221d  Sources/App/SleepIntervals.swift
+          439ca1d309c0e037b36dcd15c892fdfd08a00822a85ed1016e298bd22c3e88dd  Sources/App/AppState.swift
+          d583b3e364d9f71ff7d60556f94c1dcc885bf4d45f74b9b60b17fb5f91fc7315  Sources/App/ChatView.swift
+          a0a5450b36813ac3f85210736957cc6a369bc88995e36732ac3b65504f42be43  Sources/App/LokiApp.swift
+          3bf6b243296505dbb290e9b32abbef7bb07db367dc604e435ec874e43f8cf170  Sources/App/HealthView.swift
+          bfa6da0b1634ddd2ab48053aa3c86b53c045395d5075b0160e8aa53d684d3ee1  Sources/App/LocationService.swift
+          fed1b5caebbcf2d7d299814fb00abae3a7f95a61567cd31982de36dc70dc42f8  Tests/SleepWakeHealth/main.swift
+          2c6bbc115c865f8b00097da15658db39696b22fc3b06eedc3dd8ecadcba92118  Sources/App/HealthArchiveSpecial.swift
+          1245a276d41433b2fd9fa21783626a2d41add8a2ebaae76c98ee35f8551fa696  Sources/App/HealthArchiveSeries.swift
+          3c919ead47116ebc8dd5b06781ba013f6b7ed669687ce88730919399d92fb70d  Sources/App/HealthArchiveCatalog.swift
+          fac43f910d9a6390c810ebe79e6dff5cdca6a023ddb258b4156c6d1978b9ce78  Sources/App/HealthArchiveSchedule.swift
+          d407e96ce2a62f362d718a52dbccc56e5da058614ea52d3e0bff1084a4467d50  Sources/App/NativeHealthInventory.swift
+          SOURCE_AFTER
+          python3 - <<'BUMP'
+          from pathlib import Path
+          p=Path('project.yml')
+          s=p.read_text()
+          assert '112104' in s and '112301' not in s
+          before='NSHealthShareUsageDescription: 经你允许，Loki 读取心率、HRV、睡眠和步数，用于展示及关心提醒，不作医学诊断。'
+          after='NSHealthShareUsageDescription: Loki 可读取你在 Apple 健康中选择共享的记录，包括睡眠、呼吸、心率、腕温、运动、经期及排卵检测，用于健康卡片和你的私人聊天。在「健康 → 数据与分享」可以关闭同步。'
+          assert s.count(before)==1
+          s=s.replace(before,after)
+          key='NSHealthClinicalHealthRecordsShareUsageDescription:'
+          clinical='        NSHealthClinicalHealthRecordsShareUsageDescription: 经你单独授权，Loki 可以读取你在苹果健康中保存的医疗机构记录，并在你的私人聊天中根据记录回答问题。'
+          anchor='        com.apple.developer.healthkit.background-delivery: true'
+          entitlement='        com.apple.developer.healthkit.access: [health-records]'
+          old='        NSHealthUpdateUsageDescription:'
+          assert s.count(old)==1 and key not in s
+          s=s.replace(old,clinical+'\n'+old)
+          assert s.count(anchor)==1 and entitlement not in s
+          s=s.replace(anchor,anchor+'\n'+entitlement)
+          p.write_text(s.replace('112104','112301'))
+          BUMP
+      - name: Test sleep selection and overnight readings
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc -swift-version 5 Sources/App/SleepIntervals.swift Sources/App/SleepDetails.swift Tests/SleepWakeHealth/main.swift -o "$RUNNER_TEMP/test-sleep-wake"
+          "$RUNNER_TEMP/test-sleep-wake"
+      - name: Test app presence, typing and voice activity
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc -swift-version 5 -parse-as-library Sources/App/CompanionInteraction.swift Tests/CompanionInteractionRegression/main.swift -o "$RUNNER_TEMP/test-interaction"
+          "$RUNNER_TEMP/test-interaction"
+      - name: Test message timestamps and legacy conversation order
+        shell: bash
+        working-directory: app-source
+        run: |
+          swiftc Sources/App/Models.swift Sources/App/ChatHistoryTiming.swift Tests/MessageTimes/main.swift -o "$RUNNER_TEMP/loki-message-times"
+          "$RUNNER_TEMP/loki-message-times"
+      - name: Test notification routing and inbox
+        shell: bash
+        working-directory: app-source
+        run: |
+          swiftc Sources/App/ChatNotificationInbox.swift Tests/NotificationRouting/main.swift -o "$RUNNER_TEMP/loki-notification-routing"
+          "$RUNNER_TEMP/loki-notification-routing"
+      - name: Test public reasoning and tool display
+        shell: bash
+        working-directory: app-source
+        run: |
+          awk '/^struct ChatItem:/ { exit } { print }' Sources/App/Models.swift > "$RUNNER_TEMP/display-tests.swift"
+          cat >> "$RUNNER_TEMP/display-tests.swift" <<'SWIFT'
+          let prefix = "Activity · Compare the two options."
+          let tool = "Used the music search tool."
+          let stages = "Activity · Received your message.\nWriting the reply."
+          precondition(TurnProgressContent(summary: prefix, activity: tool).summary == prefix)
+          precondition(TurnProgressContent(summary: prefix, activity: tool).activity == tool)
+          precondition(TurnProgressContent(summary: stages).isEmpty)
+          precondition(TurnProgressContent(summary: "Activity · " + tool, activity: tool).summary == nil)
+          precondition(TurnProgressContent(summary: "Activity · " + tool, activity: tool).activity == tool)
+          precondition(TurnProgressContent(summary: "Compare the options.").summary == "Compare the options.")
+          precondition(TurnProgressContent(activity: tool).summary == nil)
+          precondition(TurnProgressContent(activity: tool).activity == tool)
+          print("Public progress and tool display regressions passed")
+          SWIFT
+          swift "$RUNNER_TEMP/display-tests.swift"
+      - name: Verify calibrated pointer math
+        run: |
+          cat app-source/Sources/App/PhonePointerMath.swift app-source/review/tests/pointer-math-check.swift > /tmp/pointer-check.swift
+          swift /tmp/pointer-check.swift
+      - name: Generate project
+        working-directory: app-source
+        run: |
+          command -v xcodegen || brew install xcodegen
+          swift scripts/generate-app-icon.swift
+          xcodegen generate --spec project.yml
+          mkdir -p build
+      - name: Compile complete App for simulator
+        working-directory: app-source
+        run: |
+          xcodebuild -project Loki.xcodeproj -scheme Loki -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath build/Simulator CODE_SIGNING_ALLOWED=NO build > build/simulator.log 2>&1 || { tail -100 build/simulator.log; exit 1; }
+      - name: Compile real iPhone architecture
+        working-directory: app-source
+        run: |
+          xcodebuild -project Loki.xcodeproj -scheme Loki -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/Device CODE_SIGNING_ALLOWED=NO build > build/device.log 2>&1 || { tail -100 build/device.log; exit 1; }
+          python3 scripts/verify-device-build.py build/Device/Build/Products/Debug-iphoneos/Loki.app
+          ditto -c -k --sequesterRsrc --keepParent build/Device/Build/Products/Debug-iphoneos/Loki.app build/Loki-screen-control-unsigned.zip
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: loki-health-wake-112301
+          path: |
+            app-source/build/simulator.log
+            app-source/build/device.log
+            app-source/build/Loki-screen-control-unsigned.zip
+          retention-days: 1
