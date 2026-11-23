@@ -593,49 +593,62 @@ jobs:
           runtime = available[0]
           devices = json.loads(sim('list','devices','-j'))['devices'].get(runtime['identifier'],[])
           iphones = [d for d in devices if d.get('isAvailable') and d['name'].startswith('iPhone')]
+          # This job has a clean hosted home. Prefer the already prepared, smaller-display phone.
+          def compact_rank(name):
+              return (any(letter in name for letter in ('17e','16e','SE','mini')), 'Pro' not in name and 'Plus' not in name, name)
           if iphones:
-              device = max(iphones, key=lambda d: ('Pro Max' in d['name'], tuple(map(int,re.findall(r'\d+',d['name']) or ['0'])), d['name']))
-              device_type = device['deviceTypeIdentifier']
+              device = max(iphones,key=lambda d:compact_rank(d['name']))
+              udid = device['udid']
+              print('Selected simulator model',device['name'],flush=True)
           else:
               types = [t for t in runtime.get('supportedDeviceTypes',[]) if t['name'].startswith('iPhone')]
-              if not types: raise RuntimeError('Runtime has no supported iPhone device type')
-              model = max(types, key=lambda t: ('Pro Max' in t['name'],tuple(map(int,re.findall(r'\d+',t['name']) or ['0']))))
-              device_type = model['identifier']
-          udid = sim('create','Loki 112302 startup '+os.environ.get('GITHUB_RUN_ID','validation'),device_type,runtime['identifier'])
+              if not types: raise RuntimeError('Runtime has no compatible iPhone')
+              model = max(types,key=lambda t:compact_rank(t['name']))
+              udid = sim('create','Loki 112302 startup '+os.environ.get('GITHUB_RUN_ID','validation'),model['identifier'],runtime['identifier'])
           print('Simulator runtime',runtime['version'],flush=True)
           sim('bootstatus',udid,'-b',timeout=360)
           app = Path('build/Simulator/Build/Products/Debug-iphonesimulator/Loki.app').resolve()
           info = plistlib.loads((app/'Info.plist').read_bytes())
           bid, executable = info['CFBundleIdentifier'], info['CFBundleExecutable']
           assert info['CFBundleVersion'] == '112302'
-          # On a fresh hosted boot, installd can still be indexing system App Extensions after bootstatus succeeds.
-          def registered():
-              result = run('xcrun','simctl','get_app_container',udid,bid,'app',timeout=65,check=False)
-              if result.returncode: return False
-              path = Path(result.stdout.strip())/'Info.plist'
-              if not path.is_file(): return False
-              installed = plistlib.loads(path.read_bytes())
-              return installed.get('CFBundleIdentifier') == bid and installed.get('CFBundleVersion') == '112302'
-          
+          # simctl get_app_container can stall on hosted machines. Locate the same private simulator's
+          # containers locally and verify both the bundle ID and version before using them.
+          simhome=Path.home()/'Library/Developer/CoreSimulator/Devices'/udid/'data'
+          def installed_bundle():
+              for p in (simhome/'Containers/Bundle/Application').glob('*/Loki.app/Info.plist'):
+                  try: value=plistlib.loads(p.read_bytes())
+                  except (FileNotFoundError,plistlib.InvalidFileException): continue
+                  if value.get('CFBundleIdentifier')==bid and value.get('CFBundleVersion')=='112302':
+                      return p.parent
+              return None
+          def installed_data():
+              for p in (simhome/'Containers/Data/Application').glob('*/.com.apple.mobile_container_manager.metadata.plist'):
+                  try: value=plistlib.loads(p.read_bytes())
+                  except (FileNotFoundError,plistlib.InvalidFileException): continue
+                  if value.get('MCMMetadataIdentifier')==bid: return p.parent
+              return None
+          assert installed_bundle() is None and installed_data() is None,'fresh scenario already contained the test app'
           print('Simulator booted. Installing the signed simulator product.',flush=True)
-          for attempt, budget in enumerate((480, 420),1):
+          for attempt,budget in enumerate((440,300),1):
+              # Keep the installation transaction alive as long as the bundle and data container are being registered.
+              client=subprocess.Popen(['xcrun','simctl','install',udid,str(app)],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
               try:
-                  sim('install',udid,str(app),timeout=budget)
-                  if registered(): break
-              except (subprocess.TimeoutExpired, RuntimeError) as error:
-                  # simctl timing out does not cancel installd's transaction.
-                  print(f'Install attempt {attempt}: {type(error).__name__}; checking simulator registration.',flush=True)
-                  if registered(): break
-                  if attempt == 2:
-                      result=run('xcrun','simctl','spawn',udid,'log','show','--last','90s','--style','compact','--predicate',
-                                 '(process == "installd" OR process == "installcoordinationd") AND messageType == error',
-                                 timeout=30,check=False)
-                      print(result.stdout[-1800:],flush=True)
-                      raise
-              if attempt == 2: raise RuntimeError('Simulator did not register client build 112302')
-              time.sleep(8)
-          print('Simulator has registered build 112302. Verifying cold launches.',flush=True)
-          data = Path(sim('get_app_container',udid,bid,'data',timeout=90)).resolve()
+                  deadline=time.monotonic()+budget
+                  while time.monotonic()<deadline:
+                      bundle=installed_bundle(); data=installed_data()
+                      if bundle and data:break
+                      if client.poll() not in (None,0):
+                          print('simctl install:',(client.stdout.read() or '')[-600:],flush=True)
+                          break
+                      time.sleep(2)
+              finally:
+                  if client.poll() is None:
+                      try: client.wait(timeout=15 if bundle and data else 1)
+                      except subprocess.TimeoutExpired: client.terminate()
+              if bundle and data:break
+              print('No matching registered files after install attempt',attempt,flush=True)
+          else: raise RuntimeError('Simulator did not materialize the signed bundle and its data container')
+          print('Located clean simulator app, verified build 112302 and its data container.',flush=True)
           preferences = data/'Library/Preferences'/(bid+'.plist')
           marker = data/'tmp/loki-health-observers-ready.json'
           report = Path('build/startup-smoke.json')
@@ -656,12 +669,28 @@ jobs:
               print('Cold launch:',label,flush=True)
               if marker.exists(): marker.unlink()
               opts = {'env': {**os.environ, 'SIMCTL_CHILD_LOKI_HEALTH_STARTUP_SMOKE':'1'}}
-              launch = subprocess.run(['xcrun','simctl','launch',udid,bid],stdout=subprocess.PIPE,
-                                      stderr=subprocess.STDOUT,text=True,timeout=60,**opts)
-              if launch.returncode: raise RuntimeError('App launch rejected: '+launch.stdout[-650:])
-              parsed = re.search(re.escape(bid)+r':\s*(\d+)',launch.stdout)
-              if not parsed: raise RuntimeError('App launch did not report its PID')
-              pid = parsed.group(1)
+              proc=subprocess.Popen(['xcrun','simctl','launch',udid,bid],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,**opts)
+              deadline=time.monotonic()+150
+              pid=None
+              try:
+                  while time.monotonic()<deadline:
+                      if proc.poll() is not None:
+                          output=proc.stdout.read()
+                          found=re.search(re.escape(bid)+r':\s*(\d+)',output)
+                          if proc.returncode or not found:raise RuntimeError('App launch rejected: '+output[-650:])
+                          pid=found.group(1)
+                          break
+                      rows=run('ps','-ax','-o','pid=','-o','comm=',timeout=20).stdout.splitlines()
+                      matches=[row.split(None,1)[0] for row in rows if len(row.split(None,1))==2
+                               and row.split(None,1)[1].strip()==str(bundle/executable)]
+                      if len(matches)==1:
+                          pid=matches[0];break
+                      time.sleep(1)
+              finally:
+                  if proc.poll() is None:
+                      try: proc.wait(timeout=1)
+                      except subprocess.TimeoutExpired: proc.terminate()
+              if not pid:raise RuntimeError('The simulator never launched the verified app executable')
               for seconds in range(24):
                   process=run('ps','-p',pid,'-o','state=','-o','comm=',check=False)
                   line=process.stdout.strip()
@@ -693,7 +722,6 @@ jobs:
           try:
               evidence['checks'].append(check('fresh install'))
               save()
-              sim('terminate',udid,bid)
               sim('shutdown',udid,timeout=150)
               # Seed the persistent domain while cfprefsd is stopped, exactly as an upgrade retains these switches.
               prefs=plistlib.loads(preferences.read_bytes()) if preferences.exists() else {}
