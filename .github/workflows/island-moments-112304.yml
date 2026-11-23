@@ -94,6 +94,18 @@ jobs:
         working-directory: app-source
         shell: bash
         run: |
+          python3 - <<'CANONICAL_MUSIC'
+          from pathlib import Path
+          from hashlib import sha256
+          p=Path('Sources/App/MusicService.swift')
+          raw=p.read_bytes()
+          digest=sha256(raw).hexdigest()
+          allowed={'e8df6b94f589179308a2d5a598e518f8e7c8be6ae8e3a08965f343394bd0384c','dbd7c8a45cd980504581a88fbb1a955c97e26bee4a2038f76d1f44568b6d0e8b'}
+          assert digest in allowed, digest
+          normalized=raw.replace(bytes((13,10)),bytes((10,)))
+          assert sha256(normalized).hexdigest()=='dbd7c8a45cd980504581a88fbb1a955c97e26bee4a2038f76d1f44568b6d0e8b'
+          if raw!=normalized:p.write_bytes(normalized)
+          CANONICAL_MUSIC
           shasum -a 256 -c - <<'BASELINE'
           6a3a70851b50c3739167ad5812606eb33372d3654d31df00a868dac95af8d4be  Sources/App/API.swift
           492b5f85efcc5eaff031608c5da5bbbfeff48fe4d785d50b7c0591e9d2a20971  Sources/App/AppState.swift
@@ -2057,18 +2069,34 @@ jobs:
           VERIFIED
           python3 - <<'VERSION'
           from pathlib import Path
-          p=Path('project.yml')
-          s=p.read_text()
-          assert '112303' in s and '112304' not in s and 'LOKI_ISLAND_APP' not in s and 'LOKI_ISLAND_WIDGET' not in s
-          old='    sources: [Sources/LiveActivity, Sources/Shared/LokiChatActivityAttributes.swift]'
-          new='    sources: [Sources/LiveActivity, Sources/Shared/LokiChatActivityAttributes.swift, Sources/Shared/LokiIslandState.swift, Sources/Shared/LokiIslandIntents.swift]'
-          assert s.count(old)==1
-          s=s.replace(old,new)
-          for bid,flag in [('dev.zcydrkv7yh.loki','LOKI_ISLAND_APP'),('dev.zcydrkv7yh.loki.liveactivity','LOKI_ISLAND_WIDGET')]:
-              anchor='        PRODUCT_BUNDLE_IDENTIFIER: '+bid+chr(10)
-              assert s.count(anchor)==1
-              s=s.replace(anchor,anchor+"        SWIFT_ACTIVE_COMPILATION_CONDITIONS: '$(inherited) "+flag+"'"+chr(10))
-          p.write_text(s.replace('112303','112304'))
+          import subprocess
+          spec=Path('project.yml')
+          text=spec.read_text()
+          assert '112303' in text and '112304' not in text
+          spec.write_text(text.replace('112303','112304'))
+          subprocess.run(['ruby','-ryaml','-e', r"""
+          p='project.yml'
+          data=YAML.load_file(p)
+          targets=data.fetch('targets')
+          app=targets.fetch('Loki')
+          widget=targets.fetch('LokiLiveActivity')
+          [[app,'dev.zcydrkv7yh.loki','LOKI_ISLAND_APP'],[widget,'dev.zcydrkv7yh.loki.liveactivity','LOKI_ISLAND_WIDGET']].each do |target,bid,flag|
+            settings=target.fetch('settings').fetch('base')
+            abort('Unexpected target ID') unless settings.fetch('PRODUCT_BUNDLE_IDENTIFIER')==bid
+            current=settings.fetch('SWIFT_ACTIVE_COMPILATION_CONDITIONS','$(inherited)')
+            abort('Unexpected compilation conditions') unless current.is_a?(String) && !current.include?(flag)
+            settings['SWIFT_ACTIVE_COMPILATION_CONDITIONS']=[current,flag].join(' ')
+          end
+          sources=widget.fetch('sources')
+          paths=sources.map { |s| s.is_a?(Hash) ? s.fetch('path') : s }
+          abort('Unexpected widget baseline sources') unless paths.include?('Sources/Shared/LokiChatActivityAttributes.swift')
+          ['Sources/Shared/LokiIslandState.swift','Sources/Shared/LokiIslandIntents.swift'].each do |p|
+            abort('Shared source already present') if paths.include?(p)
+            sources << p
+          end
+          File.write(p,YAML.dump(data))
+          abort('Project round-trip mismatch') unless YAML.load_file(p)==data
+          """],check=True)
           VERSION
       - name: Test Island replay and timing
         working-directory: app-source
@@ -2226,7 +2254,13 @@ jobs:
           pid="$(echo "$result" | awk '{print $NF}')"
           sleep 3
           ps -p "$pid" -o pid= >/dev/null
-          echo "Installed and launched $bundle successfully"
+          xcrun simctl terminate "$device" "$bundle"
+          second="$(xcrun simctl launch "$device" "$bundle")"
+          second_pid="$(echo "$second" | awk '{print $NF}')"
+          test "$pid" != "$second_pid"
+          sleep 5
+          ps -p "$second_pid" -o pid= >/dev/null
+          echo "Verified first and second launches for $bundle"
       - name: Print simulator diagnostics
         working-directory: app-source
         if: failure()
