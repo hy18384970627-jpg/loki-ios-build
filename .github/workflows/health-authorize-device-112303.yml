@@ -1,0 +1,790 @@
+name: Build Loki safe health authorization for iPhone 112303
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/health-authorize-device-112303.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: loki-health-authorize-device-112303
+  cancel-in-progress: false
+jobs:
+  app:
+    runs-on: xcode-27
+    timeout-minutes: 48
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-iphone-control
+          ref: 8be1a93226edf64a2be9678f429383bc891f3dce
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: d6b09385be43ff8b595f01c0729dad073f83fd82
+          path: verified-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: bdf05059603c369e0f2cceb56890ed1fa2f7d437
+          path: prior-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 3d5400d4edd282c8353fe9ca5f811e64fa35d2a5
+          path: notify-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 555062cda24502d988752cfb072df51bdf0498f4
+          path: time-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 3640476e16425c88d43f258027432c102838cb4a
+          path: mood-desk-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 94570727471955e14c95ba446dbef62aaeb29caa
+          path: health-wake-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: ee5fc9af98d33c71deb0661f8012cea46f2b87ae
+          path: launch-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 0872673023b590e71745ee3805dd865fd7d60140
+          path: consent-base-recipe
+          persist-credentials: false
+      - name: Reconstruct the verified 112302 client
+        shell: bash
+        run: |
+          echo 'c93cbe1360871b5dfa47c925cf3ad8e246cded48f15f9a64c4329e4ef394d0f5  consent-base-recipe/.github/workflows/health-launch-112302.yml' | shasum -a 256 -c -
+          ruby <<'PREVIOUS'
+          require 'yaml'
+          require 'json'
+          steps = YAML.load_file('consent-base-recipe/.github/workflows/health-launch-112302.yml').fetch('jobs').fetch('app').fetch('steps')
+          JSON.parse('["Reconstruct the verified 112301 client", "Apply reviewed launch changes"]').each do |name|
+            matches = steps.select { |s| s['name'] == name }
+            abort('Missing baseline step') unless matches.size == 1
+            step=matches.first
+            dir=step.fetch('working-directory','.')
+            abort('Unexpected baseline directory') unless ['.','app-source'].include?(dir)
+            system('/bin/bash','-e','-o','pipefail','-c',step.fetch('run'),chdir:dir) or abort(name)
+          end
+          PREVIOUS
+      - name: Apply reviewed authorization changes
+        working-directory: app-source
+        shell: bash
+        run: |
+          shasum -a 256 -c - <<'BASELINE'
+          3c919ead47116ebc8dd5b06781ba013f6b7ed669687ce88730919399d92fb70d  Sources/App/HealthArchiveCatalog.swift
+          f6ed49c930d4976409a3550fe6310b44aa86f10bef7ae73b19c14860785a23a2  Sources/App/NativeHealthInventory.swift
+          e3130a472b5db21bfac0bf80c891ae24a0290ee2ec619ad9470b6065c19fe118  Sources/App/HealthService.swift
+          d70d48d776ec8b83d82fa8f454fc742ef0026d7ce32646eb21447821c5a19811  Sources/App/LokiApp.swift
+          a2902614603b9fc34293c51c605f2a4c9c27e2e07ad7e22bb2833aae7cc26e66  Sources/App/HealthView.swift
+          439ca1d309c0e037b36dcd15c892fdfd08a00822a85ed1016e298bd22c3e88dd  Sources/App/AppState.swift
+          BASELINE
+          patch --batch -p1 <<'LAUNCH_PATCH'
+          --- a/Sources/App/HealthArchiveCatalog.swift
+          +++ b/Sources/App/HealthArchiveCatalog.swift
+          @@ -30,7 +30,6 @@
+                   Height WaistCircumference DistanceCrossCountrySkiing DistanceCycling DistanceDownhillSnowSports
+                   DistancePaddleSports DistanceRowing DistanceSkatingSports DistanceSwimming DistanceWalkingRunning
+                   DistanceWheelchair UnderwaterDepth RunningStrideLength SixMinuteWalkTestDistance WalkingStepLength
+          -        HipCircumference
+                   """),
+                   ("kcal", """
+                   ActiveEnergyBurned BasalEnergyBurned DietaryEnergyConsumed
+          @@ -137,11 +136,15 @@
+                   HKObjectType.correlationType(forIdentifier: $0)
+               }
+               static let ordinary: [HKSampleType] = {
+          -        let quantities: [HKSampleType] = quantityUnits.keys.compactMap {
+          -            HKObjectType.quantityType(forIdentifier: .init(rawValue: $0))
+          +        let version = ProcessInfo.processInfo.operatingSystemVersion
+          +        let quantities: [HKSampleType] = quantityUnits.keys.compactMap { identifier in
+          +            guard HealthReadAccessPolicy.isOrdinary(identifier, version: version) else { return nil }
+          +            return HKObjectType.quantityType(forIdentifier: .init(rawValue: identifier))
+                   }
+          -        let categories: [HKSampleType] = words(categoryNames).compactMap {
+          -            HKObjectType.categoryType(forIdentifier: .init(rawValue: "HKCategoryTypeIdentifier" + $0))
+          +        let categories: [HKSampleType] = words(categoryNames).compactMap { name in
+          +            let identifier = "HKCategoryTypeIdentifier" + name
+          +            guard HealthReadAccessPolicy.isOrdinary(identifier, version: version) else { return nil }
+          +            return HKObjectType.categoryType(forIdentifier: .init(rawValue: identifier))
+                   }
+                   return quantities + categories
+               }()
+          --- a/Sources/App/NativeHealthInventory.swift
+          +++ b/Sources/App/NativeHealthInventory.swift
+          @@ -9,6 +9,8 @@
+               @Published private(set) var progress = ""
+               private var lastCountCheck = Date.distantPast
+               private var retryAfter: [String: Date] = [:]
+          +    private var reviewedReads: [String: Bool] = [:]
+          +    private var lastScopeReview = Date.distantPast
+               private struct ArchiveCounts: Decodable { let enabled: Bool; let record_count: Int?; let type_count: Int? }
+               func refreshCounts(force: Bool = false) async {
+                   guard ready, let base = UserDefaults.standard.string(forKey: "gatewayURL"),
+          @@ -46,6 +48,10 @@
+                   if foreground || Date().timeIntervalSince(lastCatchUp) >= 900 {
+                       needsFullCheck = true
+                       reviewSelections = true
+          +            if Date().timeIntervalSince(lastScopeReview) >= 1800 {
+          +                reviewedReads.removeAll()
+          +                lastScopeReview = .now
+          +            }
+                       lastCatchUp = .now
+                   }
+                   schedule(force: true)
+          @@ -63,18 +69,72 @@
+               init(store: HKHealthStore) { self.store = store }
+           
+               var regularReadTypes: Set<HKObjectType> {
+          -        var result = Set(HealthArchiveCatalog.ordinary.map { $0 as HKObjectType })
+          -        result.formUnion(HealthArchiveCatalog.characteristics.map { $0 as HKObjectType })
+          -        result.formUnion(HealthArchiveSpecial.sampleTypes.filter { !$0.requiresPerObjectAuthorization() && $0 != HKObjectType.medicationDoseEventType() }.map { $0 as HKObjectType })
+          -        result.insert(HKObjectType.activitySummaryType())
+          -        return result
+          +        let version = ProcessInfo.processInfo.operatingSystemVersion
+          +        var ordinary = HealthArchiveCatalog.ordinary.map { $0 as HKObjectType }
+          +        ordinary += HealthArchiveCatalog.characteristics.map { $0 as HKObjectType }
+          +        return Set(ordinary.filter { HealthReadAccessPolicy.isOrdinary($0.identifier, version: version) &&
+          +                                     !$0.requiresPerObjectAuthorization() })
+          +    }
+          +    var advancedReadTypes: Set<HKObjectType> {
+          +        // Explicit public read types. A correlation is authorized via its components and a
+          +        // medication dose via the selected medication. Neither belongs in this sheet.
+          +        let types: [HKObjectType] = [HKObjectType.workoutType(), HKSeriesType.workoutRoute(), HKSeriesType.heartbeat(),
+          +            HKObjectType.electrocardiogramType(), HKObjectType.audiogramSampleType(), HKObjectType.stateOfMindType(),
+          +            HKScoredAssessmentType(.GAD7), HKScoredAssessmentType(.PHQ9), HKObjectType.activitySummaryType()]
+          +        return Set(types.filter { !$0.requiresPerObjectAuthorization() })
+          +    }
+          +    // HealthKit deliberately does not reveal read grants. "Unnecessary" means the
+          +    // person already answered the sheet; the store itself returns only visible records.
+          +    // This status query never presents UI and preserves existing permissions after upgrades.
+          +    private func previouslyReviewed(_ type: HKObjectType) async -> Bool {
+          +        let id = type.identifier
+          +        if let cached = reviewedReads[id] { return cached }
+          +        let settings = UserDefaults.standard
+          +        let scope: String?
+          +        if HealthReadAccessPolicy.isOrdinary(id, version: ProcessInfo.processInfo.operatingSystemVersion) {
+          +            scope = "healthArchiveReviewedOrdinary"
+          +        } else if type is HKClinicalType {
+          +            scope = "healthArchiveReviewedClinical"
+          +        } else if advancedReadTypes.contains(type) {
+          +            scope = "healthArchiveReviewedAdvanced"
+          +        } else { scope = nil }
+          +        if let scope, let eligible = settings.stringArray(forKey: scope), !eligible.contains(id) {
+          +            reviewedReads[id] = false
+          +            return false
+          +        }
+          +        let allowed: Bool
+          +        if type == HKObjectType.medicationDoseEventType() {
+          +            allowed = UserDefaults.standard.bool(forKey: "healthArchiveIndividual")
+          +        } else if let correlation = type as? HKCorrelationType {
+          +            let components: [HKQuantityTypeIdentifier]
+          +            if correlation == HKObjectType.correlationType(forIdentifier: .bloodPressure) {
+          +                components = [.bloodPressureSystolic, .bloodPressureDiastolic]
+          +            } else {
+          +                components = HealthArchiveCatalog.quantityUnits.keys.filter { $0.hasPrefix("HKQuantityTypeIdentifierDietary") }
+          +                    .map { HKQuantityTypeIdentifier(rawValue: $0) }
+          +            }
+          +            var seen = false
+          +            for component in components {
+          +                if let quantity = HKObjectType.quantityType(forIdentifier: component), await previouslyReviewed(quantity) {
+          +                    seen = true; break
+          +                }
+          +            }
+          +            allowed = seen
+          +        } else if type.requiresPerObjectAuthorization() {
+          +            return false
+          +        } else {
+          +            do { allowed = try await HealthReadAuthorization.status([type], store: store) == .unnecessary }
+          +            catch { return false }
+          +        }
+          +        reviewedReads[id] = allowed
+          +        return allowed
+               }
+               // The medication-dose sample uses an anchored query after authorizing the
+               // medication directory (WWDC25/321). The vision-prescription type requires
+               // per-object access and a complete HKSampleQuery selection read.
+               private func anchoredTypes(includeClinical: Bool, includeDoses: Bool) -> [String: HKSampleType] {
+                   var types = HealthArchiveCatalog.ordinary + HealthArchiveCatalog.correlations + HealthArchiveSpecial.sampleTypes
+          -        if includeClinical { types += HealthArchiveSpecial.clinicalTypes }
+          +        if includeClinical && store.supportsHealthRecords() { types += HealthArchiveSpecial.clinicalTypes }
+                   let supported = types.filter { type in
+                       if type == HKObjectType.visionPrescriptionType() { return false }
+                       if type == HKObjectType.medicationDoseEventType() { return includeDoses }
+          @@ -94,16 +154,27 @@
+               }
+               #endif
+               func requestClinical() async throws {
+          -        var types = Set(HealthArchiveSpecial.clinicalTypes.map { $0 as HKObjectType })
+          -        if let document = HealthArchiveDocuments.type { types.insert(document) }
+          -        guard HKHealthStore.isHealthDataAvailable(), !types.isEmpty else { throw LokiError.message("当前设备不提供临床健康记录。") }
+          -        try await store.requestAuthorization(toShare: [], read: types)
+          +        guard HKHealthStore.isHealthDataAvailable(), store.supportsHealthRecords() else {
+          +            throw LokiError.message("这台设备当前不支持医疗机构健康记录。")
+          +        }
+          +        let types = Set(HealthArchiveSpecial.clinicalTypes.map { $0 as HKObjectType })
+          +        let eligible = try await HealthReadAuthorization.request(types, store: store)
+          +        UserDefaults.standard.set(eligible.sorted(), forKey: "healthArchiveReviewedClinical")
+                   UserDefaults.standard.set(true, forKey: "healthArchiveClinical")
+                   resetAfterReview()
+               }
+          +    func requestDocuments() async throws {
+          +        guard HKHealthStore.isHealthDataAvailable(), let type = HealthArchiveDocuments.type else {
+          +            throw LokiError.message("这台设备不支持医疗文档。")
+          +        }
+          +        if type.requiresPerObjectAuthorization() { try await HealthReadAuthorization.select(type, store: store) }
+          +        else { _ = try await HealthReadAuthorization.request([type], store: store) }
+          +        UserDefaults.standard.set(true, forKey: "healthArchiveDocuments")
+          +        resetAfterReview()
+          +    }
+               func requestSelections(medications: Bool) async throws {
+                   let type: HKObjectType = medications ? HKObjectType.userAnnotatedMedicationType() : HKObjectType.visionPrescriptionType()
+          -        try await store.requestPerObjectReadAuthorization(for: type, predicate: nil)
+          +        try await HealthReadAuthorization.select(type, store: store)
+                   UserDefaults.standard.set(true, forKey: medications ? "healthArchiveIndividual" : "healthArchiveVision")
+                   resetAfterReview()
+               }
+          @@ -113,7 +184,7 @@
+                   // Newly granted dates/samples must be discoverable with a fresh anchor. Retain the
+                   // IDs of earlier selections so removed medications, documents and prescriptions can be removed remotely.
+                   state?.anchors = [:]; state?.queued = []; state?.lastReconciliation = nil
+          -        lastSync = .distantPast; retryAfter = [:]
+          +        lastSync = .distantPast; retryAfter = [:]; reviewedReads = [:]
+                   try? persist()
+                   requestCatchUp(foreground: true)
+               }
+          @@ -128,7 +199,7 @@
+                   stopObserver()
+                   state = nil
+                   transientDirty.removeAll()
+          -        retryAfter = [:]
+          +        retryAfter = [:]; reviewedReads = [:]
+                   counts = ""; progress = ""
+                   try? PrivateFiles.save([String: Data](), "healthkit-medication-identities.json")
+                   try? PrivateFiles.save(Optional<HealthArchiveSchedule>.none, file)
+          @@ -220,7 +291,7 @@
+                       retryAfter = retryAfter.filter { $0.value > Date() }
+                       let settings = UserDefaults.standard
+                       let types = anchoredTypes(includeClinical: settings.bool(forKey: "healthArchiveClinical"),
+          -                                      includeDoses: settings.bool(forKey: "healthArchiveIndividual"))
+          +                                      includeDoses: settings.bool(forKey: "healthArchiveIndividual")).filter { reviewedReads[$0.key] != false }
+                       let priority = ["HKCategoryTypeIdentifierMenstrualFlow", "HKCategoryTypeIdentifierOvulationTestResult",
+                                       "HKCategoryTypeIdentifierSleepAnalysis", "HKQuantityTypeIdentifierHeartRateVariabilitySDNN"]
+                       let ids = priority.filter { types[$0] != nil } + types.keys.filter { !priority.contains($0) }.sorted()
+          @@ -248,6 +319,15 @@
+                               state?.queued.removeAll { $0 == key }
+                               continue
+                           }
+          +                guard await previouslyReviewed(type) else {
+          +                    state?.queued.removeAll { $0 == key }
+          +                    if reviewedReads[type.identifier] != false {
+          +                        failed.insert(key)
+          +                        retryAfter[key] = Date().addingTimeInterval(1800)
+          +                    }
+          +                    processed += 1
+          +                    continue
+          +                }
+                           do { try await page(type, key: key, api: api, epoch: epoch, serial: serial) }
+                           catch is RemoteFailure { progress = "连接恢复后会从已确认的位置继续"; return false }
+                           catch is CancellationError { return false }
+          @@ -457,6 +537,7 @@
+               }
+               private func snapshots(api: MobileAPI, epoch: String, serial: Int) async throws {
+                   for type in HealthArchiveCatalog.characteristics {
+          +            guard await previouslyReviewed(type) else { continue }
+                       guard let value = try? HealthArchiveCatalog.characteristic(type, store: store) else { continue }
+                       let id = "characteristic:" + type.identifier
+                       let row = projection(id: id, type: type.identifier, kind: "characteristic", value: value,
+          @@ -489,12 +570,15 @@
+                   if UserDefaults.standard.bool(forKey: "healthArchiveVision") {
+                       try await syncVision(api: api, epoch: epoch, serial: serial)
+                   }
+          -        if UserDefaults.standard.bool(forKey: "healthArchiveClinical") {
+          +        let settings = UserDefaults.standard
+          +        let readDocuments = settings.object(forKey: "healthArchiveDocuments") as? Bool
+          +            ?? (settings.bool(forKey: "healthArchiveClinical") && settings.object(forKey: "healthArchiveReviewedClinical") == nil)
+          +        if readDocuments {
+                       try await syncDocuments(api: api, epoch: epoch, serial: serial)
+                   }
+                   let today = Calendar.current.startOfDay(for: .now)
+                   let start = Calendar.current.date(byAdding: .day, value: -6, to: today) ?? today
+          -        if let current = try? await rings(from: start, to: today) {
+          +        if await previouslyReviewed(HKObjectType.activitySummaryType()), let current = try? await rings(from: start, to: today) {
+                       try await sendProjection(current, type: HKObjectType.activitySummaryType().identifier,
+                                                api: api, epoch: epoch, serial: serial)
+                   }
+          @@ -523,6 +607,7 @@
+                   }
+               }
+               private func historicalRings(api: MobileAPI, epoch: String, serial: Int) async -> Bool {
+          +        guard await previouslyReviewed(HKObjectType.activitySummaryType()) else { return false }
+                   do {
+                       let calendar = Calendar.current
+                       let end = state?.activityDay ?? calendar.startOfDay(for: .now)
+          --- a/Sources/App/HealthService.swift
+          +++ b/Sources/App/HealthService.swift
+          @@ -39,7 +39,6 @@
+               private var observers: [HKObserverQuery] = []
+               private var refreshTask: Task<Void, Never>?
+               private var observedChanges = 0
+          -    private var reviewingAccess = false
+               #if targetEnvironment(simulator)
+               private var capturedSimulatorRegistration = false
+               #endif
+          @@ -58,35 +57,19 @@
+               }
+               func authorize() async throws {
+                   guard HKHealthStore.isHealthDataAvailable() else { throw LokiError.message("这台设备没有可用的健康数据服务。") }
+          -        do {
+          -            try await store.requestAuthorization(toShare: [], read: types.union(inventory.regularReadTypes))
+          -            UserDefaults.standard.set(true, forKey: "healthInventoryAccessReviewedV1")
+          -            accessNote = ""
+          -        } catch {
+          -            // An unsupported optional HealthKit type must not block sleep, HRV, steps and overnight vitals.
+          -            let broadFailure = error.localizedDescription
+          -            try await store.requestAuthorization(toShare: [], read: types)
+          -            UserDefaults.standard.set(Date(), forKey: "healthInventoryAccessRetryDate")
+          -            accessNote = "基础指标的授权已处理。更多项目可点「查看 Apple 健康读取权限」重试。\(broadFailure)"
+          -        }
+          -        inventory.resetAfterReview()
+          +        _ = try await HealthReadAuthorization.request(types, store: store)
+          +        accessNote = ""
+                   sleepCacheUpdatedAt = nil
+                   await refresh()
+               }
+          -    func reviewSharingOnForeground() async {
+          -        guard !reviewingAccess, sharingChoice != false, HKHealthStore.isHealthDataAvailable() else { return }
+          -        if sharingChoice == true && UserDefaults.standard.bool(forKey: "healthInventoryAccessReviewedV1") { return }
+          -        if let last = UserDefaults.standard.object(forKey: "healthInventoryAccessRetryDate") as? Date,
+          -           Date().timeIntervalSince(last) < 6 * 3600 { return }
+          -        reviewingAccess = true
+          -        defer { reviewingAccess = false }
+          -        do {
+          -            if sharingChoice == nil { try await setAutomaticSharing(true) }
+          -            else {
+          -                try await authorize()
+          -                if UserDefaults.standard.bool(forKey: "healthBackground") { try await background(true) }
+          -            }
+          -        } catch { syncMessage = error.localizedDescription }
+          +    func requestAdditionalHealth(_ advanced: Bool) async throws {
+          +        let types = advanced ? inventory.advancedReadTypes : inventory.regularReadTypes
+          +        let eligible = try await HealthReadAuthorization.request(types, store: store)
+          +        UserDefaults.standard.set(eligible.sorted(), forKey: advanced ? "healthArchiveReviewedAdvanced" : "healthArchiveReviewedOrdinary")
+          +        let skipped = types.count - eligible.count
+          +        accessNote = skipped > 0 ? "系统未开放其中 \(skipped) 个项目，其余授权已处理。" : "已完成权限选择，可在苹果健康中随时调整。"
+          +        inventory.resetAfterReview()
+          +        await refresh()
+               }
+               func refresh(upload: Bool = true) async {
+                   if let refreshTask { await refreshTask.value }
+          @@ -200,6 +183,9 @@
+                       if UserDefaults.standard.bool(forKey: "validateArchiveQueryConstructors") {
+                           evidence["anchored"] = inventory.validateArchiveQueriesForSimulator()
+                       }
+          +            if UserDefaults.standard.bool(forKey: "validateHealthReadAuthorization") {
+          +                Task { await writeAuthorizationSmoke() }
+          +            }
+                       let file = FileManager.default.temporaryDirectory.appendingPathComponent("loki-health-observers-ready.json")
+                       if let data = try? JSONSerialization.data(withJSONObject: evidence, options: [.sortedKeys]) {
+                           do { try data.write(to: file, options: .atomic); capturedSimulatorRegistration = true }
+          @@ -208,6 +194,29 @@
+                   }
+                   #endif
+               }
+          +    #if targetEnvironment(simulator)
+          +    // Preflight the production groups against the simulator's real HealthKit runtime.
+          +    // The deliberately invalid correlation is an isolated negative test of the Objective-C boundary.
+          +    private func writeAuthorizationSmoke() async {
+          +        let groups = [("basic", types), ("ordinary", inventory.regularReadTypes), ("advanced", inventory.advancedReadTypes)]
+          +        var result: [String: Any] = [:]
+          +        for (name, group) in groups {
+          +            result[name] = group.map(\.identifier).sorted()
+          +            do { result[name + "_status"] = try await HealthReadAuthorization.status(group, store: store).rawValue }
+          +            catch { result[name + "_error"] = (error as NSError).domain }
+          +        }
+          +        if let forbidden = HKObjectType.correlationType(forIdentifier: .bloodPressure) {
+          +            let caught: Bool = await withCheckedContinuation { continuation in
+          +                LokiHealthRequestRead(store, [forbidden]) { ok, error in
+          +                    continuation.resume(returning: !ok && error != nil)
+          +                }
+          +            }
+          +            result["invalid_correlation_rejected"] = caught
+          +        }
+          +        let url = FileManager.default.temporaryDirectory.appendingPathComponent("loki-health-auth-ready.json")
+          +        try? JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]).write(to: url, options: .atomic)
+          +    }
+          +    #endif
+               private func installObservers() {
+                   guard observers.isEmpty else { return }
+                   for type in types.compactMap({ $0 as? HKSampleType }) {
+          --- a/Sources/App/LokiApp.swift
+          +++ b/Sources/App/LokiApp.swift
+          @@ -82,10 +82,6 @@
+                       .onChange(of: app.unlocked) { _, value in
+                           if value { Task { await alarms.autoSyncCourses(api: app.api); await app.syncWallpaperReceipt(); await app.refreshCompanion(voice: voice) } }
+                       }
+          -            .task(id: app.paired && app.unlocked && phase == .active) {
+          -                guard app.paired && app.unlocked && phase == .active else { return }
+          -                await health.reviewSharingOnForeground()
+          -            }
+                       .onChange(of: voice.playing || voice.recording) { _, value in music.voiceSpeaking(value) }
+                       .onChange(of: voice.recording || call.active) { _, value in CompanionInteraction.shared.setRecording(value) }
+                       .task(id: phase == .active) {
+          --- a/Sources/App/HealthView.swift
+          +++ b/Sources/App/HealthView.swift
+          @@ -251,18 +251,27 @@
+               var body: some View {
+                   Form {
+                       Section("Apple 健康") {
+          -                Button("查看 Apple 健康读取权限", systemImage: "heart.text.clipboard") {
+          +                Button("管理睡眠、心率、HRV 和步数权限", systemImage: "heart.text.clipboard") {
+                               Task { do { try await health.authorize() } catch { app.tell(error) } }
+                           }.disabled(health.busy)
+                           Text(health.message).font(.caption).foregroundStyle(.secondary)
+                           if !health.accessNote.isEmpty { Text(health.accessNote).font(.caption).foregroundStyle(.secondary) }
+          +                Button("管理更多健康指标与个人特征") {
+          +                    Task { do { try await health.requestAdditionalHealth(false) } catch { app.tell(error) } }
+          +                }
+          +                Button("管理运动、心电、听力与心理记录") {
+          +                    Task { do { try await health.requestAdditionalHealth(true) } catch { app.tell(error) } }
+          +                }
+                           Button("选择可分享的用药记录") {
+                               Task { do { try await health.inventory.requestSelections(medications: true) } catch { app.tell(error) } }
+                           }
+                           Button("选择可分享的视力处方") {
+                               Task { do { try await health.inventory.requestSelections(medications: false) } catch { app.tell(error) } }
+                           }
+          -                Button("授权临床健康记录") {
+          +                Button("授权医疗文档") {
+          +                    Task { do { try await health.inventory.requestDocuments() } catch { app.tell(error) } }
+          +                }
+          +                Button("授权医疗机构记录") {
+                               Task { do { try await health.inventory.requestClinical() } catch { app.tell(error) } }
+                           }
+           
+          --- a/Sources/App/AppState.swift
+          +++ b/Sources/App/AppState.swift
+          @@ -849,7 +849,7 @@
+                       try PrivateFiles.save(ledger, "tool-receipts.json")
+                       switch command.name {
+                       case "health":
+          -                try await health.authorize()
+          +                await health.refresh(upload: false)
+                           detail = health.readings.isEmpty ? health.message : "已在手机读取 \(health.readings.count) 项；未自动上传"
+                       case "brightness":
+                           guard let value = command.arguments["value"]?.number, (0.05...1).contains(value) else { throw LokiError.message("亮度范围必须为 0.05–1。") }
+          --- /dev/null
+          +++ b/Sources/App/LokiHealthAuthorization.h
+          @@ -0,0 +1,13 @@
+          +#import <Foundation/Foundation.h>
+          +#import <HealthKit/HealthKit.h>
+          +
+          +NS_ASSUME_NONNULL_BEGIN
+          +// These three calls are scoped to read access. Some OS versions raise a synchronous
+          +// Objective-C validation exception instead of invoking the public NSError callback.
+          +FOUNDATION_EXPORT void LokiHealthReadStatus(HKHealthStore *store, NSSet<HKObjectType *> *types,
+          +    void (^completion)(HKAuthorizationRequestStatus status, NSError * _Nullable error));
+          +FOUNDATION_EXPORT void LokiHealthRequestRead(HKHealthStore *store, NSSet<HKObjectType *> *types,
+          +    void (^completion)(BOOL ok, NSError * _Nullable error));
+          +FOUNDATION_EXPORT void LokiHealthRequestSelection(HKHealthStore *store, HKObjectType *type,
+          +    void (^completion)(BOOL ok, NSError * _Nullable error));
+          +NS_ASSUME_NONNULL_END
+          --- /dev/null
+          +++ b/Sources/App/LokiHealthAuthorization.m
+          @@ -0,0 +1,43 @@
+          +#import "LokiHealthAuthorization.h"
+          +
+          +static NSError *LokiHealthValidationError(NSException *exception, NSSet<HKObjectType *> *types) {
+          +    NSCharacterSet *identifierCharacters = [NSCharacterSet alphanumericCharacterSet];
+          +    NSArray<NSString *> *words = [(exception.reason ?: @"") componentsSeparatedByCharactersInSet:
+          +                                   [identifierCharacters invertedSet]];
+          +    NSSet<NSString *> *identifiers = [NSSet setWithArray:words];
+          +    NSMutableArray<NSString *> *rejected = [NSMutableArray array];
+          +    for (HKObjectType *type in types) {
+          +        if ([identifiers containsObject:type.identifier]) { [rejected addObject:type.identifier]; }
+          +    }
+          +    return [NSError errorWithDomain:@"Loki.HealthAuthorization.Validation" code:1 userInfo:@{
+          +        NSLocalizedDescriptionKey: @"当前系统不允许本应用请求部分健康项目。",
+          +        @"rejected": rejected
+          +    }];
+          +}
+          +
+          +void LokiHealthReadStatus(HKHealthStore *store, NSSet<HKObjectType *> *types,
+          +                          void (^completion)(HKAuthorizationRequestStatus, NSError * _Nullable)) {
+          +    @try {
+          +        [store getRequestStatusForAuthorizationToShareTypes:[NSSet set] readTypes:types completion:completion];
+          +    } @catch (NSException *exception) {
+          +        completion(HKAuthorizationRequestStatusUnknown, LokiHealthValidationError(exception, types));
+          +    }
+          +}
+          +
+          +void LokiHealthRequestRead(HKHealthStore *store, NSSet<HKObjectType *> *types,
+          +                           void (^completion)(BOOL, NSError * _Nullable)) {
+          +    @try {
+          +        [store requestAuthorizationToShareTypes:[NSSet set] readTypes:types completion:completion];
+          +    } @catch (NSException *exception) {
+          +        completion(NO, LokiHealthValidationError(exception, types));
+          +    }
+          +}
+          +
+          +void LokiHealthRequestSelection(HKHealthStore *store, HKObjectType *type,
+          +                                void (^completion)(BOOL, NSError * _Nullable)) {
+          +    @try {
+          +        [store requestPerObjectReadAuthorizationForType:type predicate:nil completion:completion];
+          +    } @catch (NSException *exception) {
+          +        completion(NO, LokiHealthValidationError(exception, [NSSet setWithObject:type]));
+          +    }
+          +}
+          --- /dev/null
+          +++ b/Sources/App/HealthReadAccessPolicy.swift
+          @@ -0,0 +1,31 @@
+          +import Foundation
+          +
+          +enum HealthReadAccessPolicy {
+          +    // Some HealthKit objects exist on a device before third parties may use them.
+          +    // Compare against the published introduction, never just a non-nil object.
+          +    static func shipped(_ identifier: String, version: OperatingSystemVersion) -> Bool {
+          +        let minimum: (Int, Int)
+          +        switch identifier {
+          +        case "HKQuantityTypeIdentifierHipCircumference", "HKCharacteristicTypeIdentifierReferenceSex":
+          +            // These are announced for 27.3 beta. Revisit when Apple ships public read access.
+          +            return false
+          +        case "HKQuantityTypeIdentifierHeartRateVariabilityRMSSD",
+          +             "HKCategoryTypeIdentifierMenopausalState", "HKCategoryTypeIdentifierBleedingAfterMenopause":
+          +            minimum = (27, 0)
+          +        case "HKCategoryTypeIdentifierHypertensionEvent": minimum = (26, 2)
+          +        default: return true
+          +        }
+          +        return version.majorVersion > minimum.0 ||
+          +            (version.majorVersion == minimum.0 && version.minorVersion >= minimum.1)
+          +    }
+          +
+          +    static func isOrdinary(_ identifier: String, version: OperatingSystemVersion) -> Bool {
+          +        let families = ["HKQuantityTypeIdentifier", "HKCategoryTypeIdentifier", "HKCharacteristicTypeIdentifier"]
+          +        return families.contains(where: { identifier.hasPrefix($0) }) && shipped(identifier, version: version)
+          +    }
+          +
+          +    static func remaining(_ requested: Set<String>, afterRejecting rejected: [String]) -> Set<String>? {
+          +        let next = requested.subtracting(rejected)
+          +        return !next.isEmpty && next.count < requested.count ? next : nil
+          +    }
+          +}
+          --- /dev/null
+          +++ b/Sources/App/HealthReadAuthorization.swift
+          @@ -0,0 +1,52 @@
+          +import Foundation
+          +import HealthKit
+          +
+          +@MainActor enum HealthReadAuthorization {
+          +    static func status(_ types: Set<HKObjectType>, store: HKHealthStore) async throws -> HKAuthorizationRequestStatus {
+          +        try await withCheckedThrowingContinuation { continuation in
+          +            LokiHealthReadStatus(store, types) { status, error in
+          +                if let error { continuation.resume(throwing: error) }
+          +                else { continuation.resume(returning: status) }
+          +            }
+          +        }
+          +    }
+          +    private static func perform(_ operation: (@escaping (Bool, Error?) -> Void) -> Void) async throws {
+          +        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+          +            operation { ok, error in
+          +                if let error { continuation.resume(throwing: error) }
+          +                else if ok { continuation.resume() }
+          +                else { continuation.resume(throwing: LokiError.message("Apple 健康未完成这次授权。")) }
+          +            }
+          +        }
+          +    }
+          +    // Called only by a button or by the person enabling sharing. "Unnecessary" means
+          +    // the sheet was previously answered, never proof of read permission.
+          +    static func request(_ types: Set<HKObjectType>, store: HKHealthStore) async throws -> Set<String> {
+          +        guard !types.isEmpty else { throw LokiError.message("当前系统没有可申请的该类数据。") }
+          +        var eligible = types
+          +        while true {
+          +            do {
+          +                if try await status(eligible, store: store) != .unnecessary {
+          +                    try await perform { completion in
+          +                        LokiHealthRequestRead(store, eligible) { ok, error in completion(ok, error) }
+          +                    }
+          +                }
+          +                return Set(eligible.map(\.identifier))
+          +            } catch {
+          +                let issue = error as NSError
+          +                guard issue.domain == "Loki.HealthAuthorization.Validation",
+          +                      let rejected = issue.userInfo["rejected"] as? [String],
+          +                      let next = HealthReadAccessPolicy.remaining(Set(eligible.map(\.identifier)), afterRejecting: rejected) else {
+          +                    throw error
+          +                }
+          +                eligible = eligible.filter { next.contains($0.identifier) }
+          +            }
+          +        }
+          +    }
+          +    static func select(_ type: HKObjectType, store: HKHealthStore) async throws {
+          +        guard type.requiresPerObjectAuthorization() else { throw LokiError.message("当前系统不支持逐项选择此类记录。") }
+          +        try await perform { completion in
+          +            LokiHealthRequestSelection(store, type) { ok, error in completion(ok, error) }
+          +        }
+          +    }
+          +}
+          --- /dev/null
+          +++ b/Tests/HealthReadAccess/main.swift
+          @@ -0,0 +1,24 @@
+          +import Foundation
+          +
+          +func os(_ major: Int, _ minor: Int) -> OperatingSystemVersion {
+          +    .init(majorVersion: major, minorVersion: minor, patchVersion: 0)
+          +}
+          +let restricted = "HKQuantityTypeIdentifierHipCircumference"
+          +for current in [os(26, 0), os(27, 2), os(27, 3)] {
+          +    precondition(!HealthReadAccessPolicy.isOrdinary(restricted, version: current))
+          +}
+          +for id in ["HKCorrelationTypeIdentifierBloodPressure", "HKVisionPrescriptionTypeIdentifier",
+          +           "HKMedicationDoseEventTypeIdentifierMedicationDoseEvent", "HKWorkoutTypeIdentifier",
+          +           "HKClinicalTypeIdentifierAllergyRecord", "HKDocumentTypeIdentifierCDA"] {
+          +    precondition(!HealthReadAccessPolicy.isOrdinary(id, version: os(27, 2)))
+          +}
+          +precondition(HealthReadAccessPolicy.isOrdinary("HKCategoryTypeIdentifierMenstrualFlow", version: os(26, 0)))
+          +precondition(!HealthReadAccessPolicy.isOrdinary("HKCategoryTypeIdentifierHypertensionEvent", version: os(26, 0)))
+          +precondition(HealthReadAccessPolicy.isOrdinary("HKCategoryTypeIdentifierHypertensionEvent", version: os(26, 2)))
+          +precondition(!HealthReadAccessPolicy.isOrdinary("HKQuantityTypeIdentifierHeartRateVariabilityRMSSD", version: os(26, 2)))
+          +precondition(HealthReadAccessPolicy.isOrdinary("HKQuantityTypeIdentifierHeartRateVariabilityRMSSD", version: os(27, 2)))
+          +let requested: Set = ["HKQuantityTypeIdentifierHeartRate", "HKQuantityTypeIdentifierHeartRateVariabilityRMSSD"]
+          +precondition(HealthReadAccessPolicy.remaining(requested, afterRejecting: ["HKQuantityTypeIdentifierHeartRateVariabilityRMSSD"]) == ["HKQuantityTypeIdentifierHeartRate"])
+          +precondition(HealthReadAccessPolicy.remaining(requested, afterRejecting: []) == nil)
+          +precondition(HealthReadAccessPolicy.remaining(requested, afterRejecting: Array(requested)) == nil)
+          +print("Health authorization routing and OS-boundaries passed")
+          LAUNCH_PATCH
+          shasum -a 256 -c - <<'VERIFIED'
+          7ff3bffc159f23633d64fc19ccbb0f58fdea22310ff76bc551ac3afee489f179  Sources/App/HealthArchiveCatalog.swift
+          f69c39cd9c3c46c520585ed1605ba073b03f8431e82e7d02f5d98104ee5cb4ac  Sources/App/NativeHealthInventory.swift
+          8bb1d0c889fcb7b2366d865f258157bb94af16c6016ddcccea4281232edb1351  Sources/App/HealthService.swift
+          56f1fe38464db5b1a13c3f8e3c0f8ed65345111e8da7a5c06b6f31c142e06615  Sources/App/LokiApp.swift
+          c1c2af93a5a4963bf0929d44af9695d438c0199db004e27e134109b90e65804d  Sources/App/HealthView.swift
+          492b5f85efcc5eaff031608c5da5bbbfeff48fe4d785d50b7c0591e9d2a20971  Sources/App/AppState.swift
+          4278993c2c0662cf9f1406064697b90d2a1b47cdf84a30476fb51adea89d954d  Sources/App/LokiHealthAuthorization.h
+          d9185aad1b4775b811fcb15d9ab225aa347e1f495620c5f661c742e2cf5c0e2c  Sources/App/LokiHealthAuthorization.m
+          6e7e309c6e4ed3701e1b2c0071297c680c6021bf1b5b8696d23eb0267a27f2b4  Sources/App/HealthReadAccessPolicy.swift
+          3ea9b3517af5d32feed7b96fd48747a63d30bf9253dc226592931df0e31e2aa8  Sources/App/HealthReadAuthorization.swift
+          a0fcee927f5fbf6d8c63e8566d029099948b5ac795fba2cab8fe61f83e525c7e  Tests/HealthReadAccess/main.swift
+          VERIFIED
+          python3 - <<'VERSION'
+          from pathlib import Path
+          p=Path('project.yml')
+          s=p.read_text()
+          assert '112302' in s and '112303' not in s
+          anchor='        PRODUCT_BUNDLE_IDENTIFIER: dev.zcydrkv7yh.loki'+chr(10)
+          line='        SWIFT_OBJC_BRIDGING_HEADER: Sources/App/LokiHealthAuthorization.h'+chr(10)
+          assert s.count(anchor)==1 and 'SWIFT_OBJC_BRIDGING_HEADER:' not in s
+          p.write_text(s.replace(anchor,anchor+line).replace('112302','112303'))
+          VERSION
+      - name: Test HealthKit authorization group and OS version policy
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc -swift-version 5 Sources/App/HealthReadAccessPolicy.swift Tests/HealthReadAccess/main.swift -o "$RUNNER_TEMP/health-access"
+          "$RUNNER_TEMP/health-access"
+      - name: Test sleep selection and overnight readings
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc -swift-version 5 Sources/App/SleepIntervals.swift Sources/App/SleepDetails.swift Tests/SleepWakeHealth/main.swift -o "$RUNNER_TEMP/test-sleep-wake"
+          "$RUNNER_TEMP/test-sleep-wake"
+      - name: Health archive payload identity and binary reconstruction
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc -swift-version 5 Sources/App/HealthArchivePayload.swift Tests/HealthArchivePayload/main.swift -o "$RUNNER_TEMP/health-archive-payload"
+          "$RUNNER_TEMP/health-archive-payload"
+      - name: Health archive scheduling and fairness
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc -swift-version 5 Sources/App/HealthArchiveSchedule.swift Tests/HealthArchiveSchedule/main.swift -o "$RUNNER_TEMP/health-archive-scheduling"
+          "$RUNNER_TEMP/health-archive-scheduling"
+      - name: Test app presence, typing and voice activity
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc -swift-version 5 -parse-as-library Sources/App/CompanionInteraction.swift Tests/CompanionInteractionRegression/main.swift -o "$RUNNER_TEMP/test-interaction"
+          "$RUNNER_TEMP/test-interaction"
+      - name: Test message timestamps and legacy conversation order
+        shell: bash
+        working-directory: app-source
+        run: |
+          swiftc Sources/App/Models.swift Sources/App/ChatHistoryTiming.swift Tests/MessageTimes/main.swift -o "$RUNNER_TEMP/loki-message-times"
+          "$RUNNER_TEMP/loki-message-times"
+      - name: Test notification routing and inbox
+        shell: bash
+        working-directory: app-source
+        run: |
+          swiftc Sources/App/ChatNotificationInbox.swift Tests/NotificationRouting/main.swift -o "$RUNNER_TEMP/loki-notification-routing"
+          "$RUNNER_TEMP/loki-notification-routing"
+      - name: Test public reasoning and tool display
+        shell: bash
+        working-directory: app-source
+        run: |
+          awk '/^struct ChatItem:/ { exit } { print }' Sources/App/Models.swift > "$RUNNER_TEMP/display-tests.swift"
+          cat >> "$RUNNER_TEMP/display-tests.swift" <<'SWIFT'
+          let prefix = "Activity · Compare the two options."
+          let tool = "Used the music search tool."
+          let stages = "Activity · Received your message.\nWriting the reply."
+          precondition(TurnProgressContent(summary: prefix, activity: tool).summary == prefix)
+          precondition(TurnProgressContent(summary: prefix, activity: tool).activity == tool)
+          precondition(TurnProgressContent(summary: stages).isEmpty)
+          precondition(TurnProgressContent(summary: "Activity · " + tool, activity: tool).summary == nil)
+          precondition(TurnProgressContent(summary: "Activity · " + tool, activity: tool).activity == tool)
+          precondition(TurnProgressContent(summary: "Compare the options.").summary == "Compare the options.")
+          precondition(TurnProgressContent(activity: tool).summary == nil)
+          precondition(TurnProgressContent(activity: tool).activity == tool)
+          print("Public progress and tool display regressions passed")
+          SWIFT
+          swift "$RUNNER_TEMP/display-tests.swift"
+      - name: Verify calibrated pointer math
+        run: |
+          cat app-source/Sources/App/PhonePointerMath.swift app-source/review/tests/pointer-math-check.swift > /tmp/pointer-check.swift
+          swift /tmp/pointer-check.swift
+      - name: Generate project
+        working-directory: app-source
+        run: |
+          command -v xcodegen || brew install xcodegen
+          swift scripts/generate-app-icon.swift
+          xcodegen generate --spec project.yml
+          mkdir -p build
+      - name: Compile real iPhone architecture
+        working-directory: app-source
+        run: |
+          xcodebuild -project Loki.xcodeproj -scheme Loki -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/Device CODE_SIGNING_ALLOWED=NO build > build/device.log 2>&1 || { tail -100 build/device.log; exit 1; }
+          python3 scripts/verify-device-build.py build/Device/Build/Products/Debug-iphoneos/Loki.app
+          ditto -c -k --sequesterRsrc --keepParent build/Device/Build/Products/Debug-iphoneos/Loki.app build/Loki-screen-control-unsigned.zip
+      - name: Upload verified iPhone architecture
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: loki-health-authorize-112303-device
+          path: |
+            app-source/build/device.log
+            app-source/build/Loki-screen-control-unsigned.zip
+          if-no-files-found: error
+          retention-days: 1
+      - name: Preserve compiler diagnostics if the device build fails
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: loki-health-authorize-112303-diagnostics
+          path: app-source/build/device.log
+          if-no-files-found: ignore
+          retention-days: 1
