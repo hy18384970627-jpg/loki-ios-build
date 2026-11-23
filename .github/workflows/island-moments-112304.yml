@@ -1,0 +1,2235 @@
+name: Build Loki Dynamic Island for iPhone 112304
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/island-moments-112304.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: loki-island-moments-112304
+  cancel-in-progress: false
+jobs:
+  app:
+    runs-on: xcode-27
+    timeout-minutes: 48
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-iphone-control
+          ref: 8be1a93226edf64a2be9678f429383bc891f3dce
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: d6b09385be43ff8b595f01c0729dad073f83fd82
+          path: verified-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: bdf05059603c369e0f2cceb56890ed1fa2f7d437
+          path: prior-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 3d5400d4edd282c8353fe9ca5f811e64fa35d2a5
+          path: notify-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 555062cda24502d988752cfb072df51bdf0498f4
+          path: time-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 3640476e16425c88d43f258027432c102838cb4a
+          path: mood-desk-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 94570727471955e14c95ba446dbef62aaeb29caa
+          path: health-wake-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: ee5fc9af98d33c71deb0661f8012cea46f2b87ae
+          path: launch-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 0872673023b590e71745ee3805dd865fd7d60140
+          path: consent-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 5c9a09a7a22e9cce113f09f8a9e01dc22ab7a08f
+          path: island-base-recipe
+          persist-credentials: false
+      - name: Reconstruct the verified 112303 client
+        shell: bash
+        run: |
+          echo 'b2e2b4e706ca5dd8d6c193174e65f153632d5b053ee58bfd5c26fe21f56479c1  island-base-recipe/.github/workflows/health-authorize-device-112303.yml' | shasum -a 256 -c -
+          ruby <<'PREVIOUS'
+          require 'yaml'
+          require 'json'
+          steps = YAML.load_file('island-base-recipe/.github/workflows/health-authorize-device-112303.yml').fetch('jobs').fetch('app').fetch('steps')
+          JSON.parse('["Reconstruct the verified 112302 client", "Apply reviewed authorization changes"]').each do |name|
+            matches = steps.select { |s| s['name'] == name }
+            abort('Missing baseline step') unless matches.size == 1
+            step=matches.first
+            dir=step.fetch('working-directory','.')
+            abort('Unexpected baseline directory') unless ['.','app-source'].include?(dir)
+            system('/bin/bash','-e','-o','pipefail','-c',step.fetch('run'),chdir:dir) or abort(name)
+          end
+          PREVIOUS
+      - name: Apply reviewed island changes
+        working-directory: app-source
+        shell: bash
+        run: |
+          shasum -a 256 -c - <<'BASELINE'
+          6a3a70851b50c3739167ad5812606eb33372d3654d31df00a868dac95af8d4be  Sources/App/API.swift
+          492b5f85efcc5eaff031608c5da5bbbfeff48fe4d785d50b7c0591e9d2a20971  Sources/App/AppState.swift
+          fae8522d4798689af67da4bbdc38d65d258c43f00c2036c297c65ad39e8b6536  Sources/App/ChatLiveActivity.swift
+          5c29cb2e8801eb2ba89bcf18bc072d9bdfa1ea2a4228c36625bb32e5ec21a783  Sources/App/DeskView.swift
+          56f1fe38464db5b1a13c3f8e3c0f8ed65345111e8da7a5c06b6f31c142e06615  Sources/App/LokiApp.swift
+          3504308d75f5a4f0aadcaf496a4725e33f11aa09d9905fb3257677fa85e28d94  Sources/App/MusicModels.swift
+          dbd7c8a45cd980504581a88fbb1a955c97e26bee4a2038f76d1f44568b6d0e8b  Sources/App/MusicService.swift
+          9a18472821a029ade938e9b79fa44d0f18bac70f3a26dd1cbbaa59ffdf97d902  Sources/App/MusicView.swift
+          d8cfd771d6cde9ac6cbe876c8f9a72f9c42af819f8bf1348686252f4028b54e7  Sources/App/NetEaseClient.swift
+          08aa2911ef679217c8a6c9d5d2203a146db90937b648db1207a7f0bc95b9246a  Sources/App/Notifications.swift
+          d23d3c27537ffe282cf9db17ec26755247d45747ae77a3a054a2b6199e40dac4  Sources/App/PCMPlayback.swift
+          2d083573f117a06ca3a781365799d7c1d5f301b231ea5659017d3c36295b3551  Sources/App/SettingsView.swift
+          7ae4cabe1c9fc595cec1142ba72e05f40a815682ad897e0635cac20dfb59f319  Sources/App/VoiceService.swift
+          7459ba00938eceee113fca7fdb7f8e9d585dd8b809a0fcbef36347aeb4551eee  Sources/LiveActivity/LokiChatActivityWidget.swift
+          af4daec57acf665447b5b37fb7e7de82f7c2e4fd493d11bb32ad68a1ff4ca5b7  Sources/Shared/LokiChatActivityAttributes.swift
+          BASELINE
+          mkdir -p Sources/App Sources/LiveActivity Sources/Shared Tests/DeskIslandFlowTests Tests/DeskPushEnvelope Tests/IslandReplay Tests/MusicMoments
+          patch --batch -p1 <<'LAUNCH_PATCH'
+          --- a/Sources/App/API.swift
+          +++ b/Sources/App/API.swift
+          @@ -15,7 +15,7 @@
+               let shopping_action: ShoppingAction?
+               let steered_ids: [UUID]?
+           }
+          -struct FollowupReceipt: Decodable { let state: String }
+          +struct FollowupReceipt: Decodable { let state: String; var busy_plan: BusyPlanSnapshot? = nil }
+           struct ChatRequestStatus: Decodable {
+               let cursor: String?
+               let state: String
+          @@ -169,9 +169,10 @@
+                   guard let body = try JSONSerialization.jsonObject(with: prepared) as? [String: Any] else {
+                       throw LokiError.message("未能读取待发送消息。")
+                   }
+          -        struct Receipt: Decodable { let accepted: Bool; let id: String }
+          +        struct Receipt: Decodable { let accepted: Bool; let id: String; let busy_plan: BusyPlanSnapshot? }
+                   let receipt = try JSONDecoder().decode(Receipt.self, from: await data("/v1/chat/accept", body, timeout: 15))
+                   guard receipt.accepted, receipt.id == body["id"] as? String else { throw LokiError.message("尚未确认消息送达。") }
+          +        if let plan = receipt.busy_plan { Task { @MainActor in await BusyIslandAgreement.shared.apply(plan, api: self) } }
+               }
+               func replyToAccepted(id: UUID, retry: Bool = false,
+                                    onProgress: @escaping @MainActor (TurnProgressContent) -> Void) async throws -> (MobileReply, observedCompletion: Bool) {
+          @@ -221,11 +222,17 @@
+                   try JSONDecoder().decode(ChatRequestStatus.self, from: await chatStatusData(id: id))
+               }
+               func steer(id: UUID, target: UUID, message: String) async throws -> FollowupReceipt {
+          -        try JSONDecoder().decode(FollowupReceipt.self, from: await data("/v1/chat/steer", [
+          -            "id": id.uuidString, "target_request_id": target.uuidString, "message": message], timeout: 30))
+          +        let zone = TimeZone.current
+          +        let receipt = try JSONDecoder().decode(FollowupReceipt.self, from: await data("/v1/chat/steer", [
+          +            "id": id.uuidString, "target_request_id": target.uuidString, "message": message,
+          +            "device_clock": ["time_zone": zone.identifier, "utc_offset_seconds": zone.secondsFromGMT()]], timeout: 30))
+          +        if let plan = receipt.busy_plan { Task { @MainActor in await BusyIslandAgreement.shared.apply(plan, api: self) } }
+          +        return receipt
+               }
+               func followupStatus(id: UUID) async throws -> FollowupReceipt {
+          -        try JSONDecoder().decode(FollowupReceipt.self, from: await data("/v1/chat/steer/status", ["id": id.uuidString], timeout: 10))
+          +        let receipt = try JSONDecoder().decode(FollowupReceipt.self, from: await data("/v1/chat/steer/status", ["id": id.uuidString], timeout: 10))
+          +        if let plan = receipt.busy_plan { Task { @MainActor in await BusyIslandAgreement.shared.apply(plan, api: self) } }
+          +        return receipt
+               }
+               func coursePlan() async throws -> CoursePlan {
+                   try JSONDecoder().decode(CoursePlan.self, from: await data("/v1/courses", timeout: 12))
+          --- a/Sources/App/AppState.swift
+          +++ b/Sources/App/AppState.swift
+          @@ -3,6 +3,9 @@
+           import UIKit
+           
+           @MainActor final class AppState: ObservableObject {
+          +    static let islandShared = AppState()
+          +    @Published var showIslandMusic = false
+          +    private var replayPending: Set<UUID> = []
+               @Published var messages: [ChatItem] = []
+               @Published var tasks: [TaskCard] = PrivateFiles.load("tasks.json", fallback: [])
+               @Published var commands: [MobileCommand] = []
+          @@ -623,6 +626,9 @@
+                   // One durable write contains both the new background and its actual remark.
+                   try PrivateFiles.save(updated, "chat.json")
+                   messages = updated
+          +        if let id = replyingTo, let first = items.first {
+          +            await ChatLiveActivity.shared.stored(request: id, item: first)
+          +        }
+                   Task { await syncWallpaperReceipt() }
+                   if autoVoice, let voice {
+                       if waitForSpeech {
+          @@ -633,13 +639,13 @@
+                   }
+               }
+               private func enqueueSpeech(_ items: [ChatItem], voice: VoiceService, interject: Bool,
+          -                               finished: @escaping @MainActor () -> Void) {
+          +                               immediateNext: Bool = false, finished: @escaping @MainActor () -> Void) {
+                   guard !items.isEmpty else { finished(); return }
+                   let batch = UUID()
+                   let packets = items.enumerated().map { index, item in
+                       SpokenPacket(item: item, batch: batch, voice: voice, finished: index == items.count - 1 ? finished : {})
+                   }
+          -        spokenQueue.insert(packets, interject: interject, preservePreparedNext: spokenTask != nil)
+          +        spokenQueue.insert(packets, interject: interject, preservePreparedNext: spokenTask != nil && !immediateNext)
+                   guard spokenTask == nil else { return }
+                   spokenTask = Task { @MainActor [weak self] in
+                       guard let self else { return }
+          @@ -658,6 +664,37 @@
+                               for removed in self.spokenQueue.remove(where: { $0.batch == packet.batch }) { removed.finished() }
+                           }
+                           if self.spokenQueue.isEmpty { packet.voice.releaseAudioSessionIfIdle() }
+          +            }
+          +        }
+          +    }
+          +    func islandReplay(request: String, line: String, preview: String) async throws {
+          +        let voice = VoiceService.islandShared
+          +        guard ChatLiveActivity.shared.enabled, paired, restoreProtectedChat(), !callActive, !voice.recording,
+          +              voice.deskReadingKey == nil, let requestID = UUID(uuidString: request), !preview.isEmpty else {
+          +            throw IslandIntentError.unavailable
+          +        }
+          +        var selection = IslandReplayTarget.local(messages, request: requestID, line: line)
+          +        if selection == nil && line.isEmpty {
+          +            let status = try await api.chatStatus(id: requestID)
+          +            if status.state == "complete", let reply = status.reply, reply.read_without_reply != true,
+          +               let first = SentenceReplies.split(reply.speech_text ?? reply.text).first {
+          +                selection = ChatItem(role: "assistant", text: SentenceReplies.visible(first), id: requestID, speechText: first)
+          +            }
+          +        }
+          +        guard let selection, let item = IslandReplayTarget.pinned(selection, request: requestID, line: line, preview: preview),
+          +              paired, UIApplication.shared.isProtectedDataAvailable, !callActive, !voice.recording, voice.deskReadingKey == nil else {
+          +            throw IslandIntentError.unavailable
+          +        }
+          +        guard replayPending.insert(item.id).inserted else { return }
+          +        let waitingOnOtherAudio = spokenTask != nil || voice.playing || voice.playingMessageID != nil
+          +        enqueueSpeech([item], voice: voice, interject: true, immediateNext: true) { [weak self] in
+          +            self?.replayPending.remove(item.id)
+          +        }
+          +        // Keep an idle app invoked from the lock screen alive while it starts its player.
+          +        if !waitingOnOtherAudio {
+          +            let limit = ContinuousClock.now.advanced(by: .seconds(15))
+          +            while replayPending.contains(item.id), voice.audibleReplyID != item.id, ContinuousClock.now < limit {
+          +                try await Task.sleep(for: .milliseconds(80))
+                       }
+                   }
+               }
+          --- /dev/null
+          +++ b/Sources/App/BusyIslandAgreement.swift
+          @@ -0,0 +1,84 @@
+          +import Foundation
+          +
+          +struct BusyPlanSnapshot: Decodable {
+          +    struct Agreement: Decodable {
+          +        let id: String
+          +        let until: Int64
+          +        let can_extend: Bool
+          +    }
+          +    let agreement: Agreement?
+          +    let revision: Int64
+          +    let status: String?
+          +}
+          +
+          +@MainActor final class BusyIslandAgreement {
+          +    static let shared = BusyIslandAgreement()
+          +    private var scope: MobileAPI?
+          +    private var revision: Int64 = -1
+          +    private var visibleKey: String?
+          +    private var expiry: Task<Void, Never>?
+          +
+          +    private var pairedAPI: MobileAPI {
+          +        MobileAPI(base: UserDefaults.standard.string(forKey: "gatewayURL") ?? "", token: SecureToken.read())
+          +    }
+          +
+          +    func refresh(api: MobileAPI) async {
+          +        guard !api.base.isEmpty, !api.token.isEmpty else { return }
+          +        do {
+          +            let data = try await api.data("/v1/care/agreement", timeout: 8)
+          +            try await apply(JSONDecoder().decode(BusyPlanSnapshot.self, from: data), api: api)
+          +        } catch {
+          +            // The last acknowledged deadline continues to expire locally while offline.
+          +        }
+          +    }
+          +
+          +    func extend(key: String, token: String) async throws {
+          +        guard UUID(uuidString: key) != nil, let deadline = Int64(token), deadline > 0 else {
+          +            throw LokiError.message("This break is no longer available.")
+          +        }
+          +        let api = pairedAPI
+          +        let data = try await api.data("/v1/care/agreement/extend", [
+          +            "agreement_id": key, "expected_deadline": deadline
+          +        ], timeout: 8)
+          +        let result = try JSONDecoder().decode(BusyPlanSnapshot.self, from: data)
+          +        await apply(result, api: api)
+          +        guard result.status == "extended" || result.status == "already_applied" else {
+          +            throw LokiError.message("This break has already changed.")
+          +        }
+          +    }
+          +
+          +    func apply(_ snapshot: BusyPlanSnapshot, api: MobileAPI) async {
+          +        let current = pairedAPI
+          +        guard api.base == current.base, api.token == current.token, !api.token.isEmpty else { return }
+          +        if scope?.base != api.base || scope?.token != api.token {
+          +            expiry?.cancel()
+          +            scope = api
+          +            revision = -1
+          +            visibleKey = nil
+          +        }
+          +        guard snapshot.revision >= revision else { return }
+          +        let firstSnapshot = revision < 0
+          +        revision = snapshot.revision
+          +        guard let agreement = snapshot.agreement,
+          +              Date(timeIntervalSince1970: TimeInterval(agreement.until)) > Date() else {
+          +            expiry?.cancel()
+          +            let priorKey = visibleKey
+          +            visibleKey = nil
+          +            if firstSnapshot || priorKey != nil { await LokiIsland.shared.hide(.busy, key: priorKey) }
+          +            return
+          +        }
+          +        let end = Date(timeIntervalSince1970: TimeInterval(agreement.until))
+          +        visibleKey = agreement.id
+          +        expiry?.cancel()
+          +        expiry = Task { [weak self] in
+          +            do { try await Task.sleep(for: .seconds(max(0, end.timeIntervalSinceNow))) } catch { return }
+          +            guard let self, revision == snapshot.revision, visibleKey == agreement.id else { return }
+          +            visibleKey = nil
+          +            await LokiIsland.shared.hide(.busy, key: agreement.id)
+          +        }
+          +        await LokiIsland.shared.show(kind: .busy, key: agreement.id, phase: "busy", title: "Time to yourself",
+          +            detail: "Until " + end.formatted(date: .omitted, time: .shortened),
+          +            action: agreement.can_extend ? .extendBusy : nil, token: agreement.can_extend ? String(agreement.until) : "",
+          +            until: end, staleAt: end)
+          +    }
+          +}
+          --- a/Sources/App/ChatLiveActivity.swift
+          +++ b/Sources/App/ChatLiveActivity.swift
+          @@ -59,16 +59,32 @@
+           
+               func reply(id: UUID, text: String) async {
+                   guard let activity, activity.attributes.requestID == id.uuidString else { return }
+          -        let preview = SentenceReplies.split(text).first ?? SentenceReplies.visible(text)
+          +        let preview = SentenceReplies.visible(SentenceReplies.split(text).first ?? text)
+                   let state = LokiChatActivityAttributes.ContentState(phase: "reply", preview: String(preview.prefix(240)))
+                   await activity.update(ActivityContent(state: state, staleDate: Date().addingTimeInterval(120)))
+               }
+           
+          -    func speaking(_ value: Bool) async {
+          -        guard let activity, activity.content.state.phase != "thinking" else { return }
+          -        var state = activity.content.state
+          -        state.phase = value ? "speaking" : "reply"
+          -        await activity.update(ActivityContent(state: state, staleDate: Date().addingTimeInterval(120)))
+          +    func stored(request: UUID, item: ChatItem) async {
+          +        guard let activity = Activity<LokiChatActivityAttributes>.activities.first(where: {
+          +            $0.attributes.requestID == request.uuidString
+          +        }) else { return }
+          +        let state = LokiChatActivityAttributes.ContentState(phase: "reply", preview: IslandText.limit(item.displayText, bytes: 640), lineID: item.id.uuidString)
+          +        await activity.update(ActivityContent(state: state, staleDate: Date().addingTimeInterval(120), relevanceScore: 85))
+          +    }
+          +
+          +    func audible(_ line: UUID?) async {
+          +        let item = line.flatMap { id in AppState.islandShared.messages.first { $0.id == id && $0.role == "assistant" } }
+          +        for activity in Activity<LokiChatActivityAttributes>.activities {
+          +            var state = activity.content.state
+          +            if let item, item.replyingTo?.uuidString == activity.attributes.requestID {
+          +                state.phase = "speaking"
+          +                state.lineID = item.id.uuidString
+          +                state.preview = IslandText.limit(item.displayText, bytes: 640)
+          +            } else if state.phase == "speaking" {
+          +                state.phase = "reply"
+          +            } else { continue }
+          +            await activity.update(ActivityContent(state: state, staleDate: Date().addingTimeInterval(120), relevanceScore: 85))
+          +        }
+               }
+           
+               func failed(id: UUID) async {
+          --- /dev/null
+          +++ b/Sources/App/DeskChapterContinuation.swift
+          @@ -0,0 +1,14 @@
+          +struct DeskChapterContinuation {
+          +    private(set) var queued: String?
+          +
+          +    mutating func choose(_ requested: String, readySuccessor: String?) -> Bool {
+          +        guard !requested.isEmpty, requested == readySuccessor else { return false }
+          +        queued = requested
+          +        return true
+          +    }
+          +
+          +    mutating func finish(naturally: Bool, readySuccessor: String?) -> String? {
+          +        defer { queued = nil }
+          +        return naturally && queued == readySuccessor ? queued : nil
+          +    }
+          +}
+          --- /dev/null
+          +++ b/Sources/App/DeskIslandPush.swift
+          @@ -0,0 +1,86 @@
+          +import ActivityKit
+          +import UIKit
+          +import UserNotifications
+          +
+          +@MainActor final class DeskIslandPush {
+          +    static let shared = DeskIslandPush()
+          +    private typealias DeskActivity = Activity<LokiMomentAttributes>
+          +    private var observing = false
+          +    private var token: Data?
+          +    private var watching = Set<String>()
+          +    private var registered: [String]?
+          +    private var registering = false
+          +    private var resync = false
+          +
+          +    func observe() {
+          +        guard !observing else { return }
+          +        observing = true
+          +        token = DeskActivity.pushToStartToken
+          +        Task {
+          +            for await newToken in DeskActivity.pushToStartTokenUpdates {
+          +                token = newToken
+          +                await sync()
+          +            }
+          +        }
+          +        Task {
+          +            for item in DeskActivity.activities { observe(item) }
+          +            for await item in DeskActivity.activityUpdates { observe(item) }
+          +        }
+          +    }
+          +
+          +    private func observe(_ item: DeskActivity) {
+          +        guard item.attributes.kind == .desk, watching.insert(item.id).inserted else { return }
+          +        Task {
+          +            if item.content.state.phase == "arrived" {
+          +                let app = AppState.islandShared
+          +                if app.paired, ChatLiveActivity.shared.enabled {
+          +                    // An APNs start can launch the app in the background without opening a scene.
+          +                    // Retry a coalesced/temporarily unavailable private fetch within the wake window.
+          +                    for _ in 0..<3 {
+          +                        _ = await DeskIslandReader.shared.refresh(api: app.api)
+          +                        if item.content.state.phase != "arrived" || item.activityState == .ended || item.activityState == .dismissed { break }
+          +                        try? await Task.sleep(for: .seconds(1))
+          +                    }
+          +                } else { await item.end(nil, dismissalPolicy: .immediate) }
+          +            }
+          +            await sync()
+          +            if item.activityState != .ended && item.activityState != .dismissed {
+          +                for await state in item.activityStateUpdates {
+          +                    if state == .ended || state == .dismissed { break }
+          +                }
+          +            }
+          +            watching.remove(item.id)
+          +            await sync()
+          +        }
+          +    }
+          +
+          +    func sync() async {
+          +        observe()
+          +        guard !registering else { resync = true; return }
+          +        registering = true
+          +        defer { registering = false }
+          +        repeat {
+          +            resync = false
+          +            let app = AppState.islandShared
+          +            guard app.paired, let device = UserDefaults.standard.string(forKey: "apnsToken"),
+          +                  !device.isEmpty else { registered = nil; return }
+          +            let settings = await UNUserNotificationCenter.current().notificationSettings()
+          +            let authorized = [.authorized, .provisional, .ephemeral].contains(settings.authorizationStatus)
+          +            let enabled = ChatLiveActivity.shared.enabled && ActivityAuthorizationInfo().areActivitiesEnabled && authorized
+          +            let active = enabled && DeskActivity.activities.contains {
+          +                $0.attributes.kind == .desk && [.active, .stale].contains($0.activityState)
+          +            }
+          +            let start = enabled ? (token ?? DeskActivity.pushToStartToken)?.map { String(format: "%02x", $0) }.joined() : nil
+          +            let identity = [UserDefaults.standard.string(forKey: "gatewayURL") ?? "", device, String(enabled), String(active), start ?? ""]
+          +            if identity != registered {
+          +                var payload: [String: Any] = ["enabled": enabled, "device": device, "active": active]
+          +                if let start { payload["start_token"] = start }
+          +                do {
+          +                    let data = try await app.api.data("/v1/desk/live-device", payload, timeout: 5)
+          +                    struct Confirmation: Decodable { let registered: Bool }
+          +                    if try JSONDecoder().decode(Confirmation.self, from: data).registered { registered = identity }
+          +                } catch { /* The next foreground refresh or token change retries. */ }
+          +            }
+          +        } while resync
+          +    }
+          +}
+          --- /dev/null
+          +++ b/Sources/App/DeskIslandReader.swift
+          @@ -0,0 +1,222 @@
+          +import Foundation
+          +import UIKit
+          +import ActivityKit
+          +import Combine
+          +
+          +private struct DeskIslandFeed: Decodable {
+          +    struct Writing: Decodable { let key: String; let expires: Double }
+          +    struct Saved: Decodable { let key: String; let saved: Double }
+          +    let writing: Writing?
+          +    let latest: Saved?
+          +}
+          +
+          +private struct ShelfChapter: Decodable {
+          +    let key, title, first, project: String
+          +    let number: Int
+          +    let recording: DeskRecording?
+          +    var playable: Bool { recording?.ready == true && recording?.parts.isEmpty == false }
+          +}
+          +
+          +private struct ShelfPage: Decodable {
+          +    let chapter: ShelfChapter
+          +    let next: ShelfChapter?
+          +}
+          +
+          +@MainActor final class DeskIslandReader: ObservableObject {
+          +    static let shared = DeskIslandReader()
+          +    struct Destination: Identifiable { let id: String }
+          +    @Published var destination: Destination?
+          +    private var writer: String?
+          +    private var letter: ShelfPage?
+          +    private var letterExpires = Date.distantPast
+          +    private var reading: ShelfPage?
+          +    private var finished: ShelfPage?
+          +    private var continuation = DeskChapterContinuation()
+          +    private var request = UUID()
+          +    private var loadRequest = UUID()
+          +    private var refreshing = false
+          +    private var subscribed: Bool?
+          +    private let cursor = "deskIsland.latestChapter.v1"
+          +
+          +    func open(key: String) {
+          +        AppState.islandShared.selectedTab = 3
+          +        if key.range(of: #"^[1-9][0-9]{0,15}\.(0|[1-9][0-9]{0,5})$"#, options: .regularExpression) != nil {
+          +            destination = Destination(id: key)
+          +        }
+          +    }
+          +
+          +    private func page(_ key: String, api: MobileAPI) async throws -> ShelfPage {
+          +        guard key.range(of: #"^[1-9][0-9]{0,15}\.(0|[1-9][0-9]{0,5})$"#, options: .regularExpression) != nil
+          +        else { throw LokiError.message("无法找到这一章。") }
+          +        let data = try await api.data("/v1/desk/chapter/" + key, timeout: 8)
+          +        let value = try JSONDecoder().decode(ShelfPage.self, from: data)
+          +        guard value.chapter.key == key else { throw LokiError.message("章节已经变化，请重新打开书桌。") }
+          +        return value
+          +    }
+          +
+          +    @discardableResult func refresh(api: MobileAPI) async -> Bool {
+          +        guard !refreshing else { return false }
+          +        refreshing = true
+          +        defer { refreshing = false }
+          +        Task { await DeskIslandPush.shared.sync() }
+          +        do {
+          +            let enabled = (UserDefaults.standard.object(forKey: "liveChatEnabled") as? Bool ?? true)
+          +                && ActivityAuthorizationInfo().areActivitiesEnabled
+          +            if subscribed != enabled {
+          +                _ = try await api.data("/v1/desk/notifications", ["enabled": enabled], timeout: 6)
+          +                subscribed = enabled
+          +            }
+          +            guard enabled else { return false }
+          +            let data = try await api.data("/v1/desk/activity", timeout: 6)
+          +            let feed = try JSONDecoder().decode(DeskIslandFeed.self, from: data)
+          +            let now = Date()
+          +            let desks = Activity<LokiMomentAttributes>.activities.filter {
+          +                $0.attributes.kind == .desk && [.active, .stale].contains($0.activityState)
+          +            }
+          +            let remote = desks.filter { $0.content.state.phase == "arrived" }
+          +            if let track = reading {
+          +                // A successor can be saved or finish pre-recording during playback.
+          +                if track.next?.playable != true, let update = try? await page(track.chapter.key, api: api),
+          +                   reading?.chapter.key == update.chapter.key, update.next?.playable == true {
+          +                    reading = update
+          +                    await showReading(update)
+          +                    return true
+          +                }
+          +                if !remote.isEmpty {
+          +                    await showReading(track)
+          +                    return true
+          +                }
+          +                return false
+          +            }
+          +            if let pen = feed.writing, Date(timeIntervalSince1970: pen.expires) > now {
+          +                writer = pen.key
+          +                await LokiIsland.shared.show(kind: .desk, key: pen.key, phase: "writing", title: "At the desk",
+          +                    detail: "Writing", staleAt: Date(timeIntervalSince1970: pen.expires))
+          +                return true
+          +            }
+          +            if let old = writer {
+          +                writer = nil
+          +                await LokiIsland.shared.hide(.desk, key: old)
+          +            }
+          +            guard let latest = feed.latest else { return false }
+          +            let defaults = UserDefaults.standard
+          +            let seen = defaults.string(forKey: cursor)
+          +            let needsPushedPage = !remote.isEmpty
+          +            if seen == nil && !needsPushedPage {
+          +                defaults.set(latest.key, forKey: cursor)
+          +                return false
+          +            }
+          +            if let onIsland = desks.first(where: { $0.content.state.key == latest.key &&
+          +                $0.content.state.phase == "letter" && $0.content.state.action == nil }),
+          +               let expires = onIsland.content.staleDate, expires > now {
+          +                letterExpires = expires
+          +            }
+          +            let waitingForAudio = (letter.map { $0.chapter.key == latest.key && !$0.chapter.playable } ?? false)
+          +                || desks.contains { $0.content.state.key == latest.key && $0.content.state.phase == "letter" && $0.content.state.action == nil }
+          +            if seen != latest.key || needsPushedPage || (waitingForAudio && letterExpires > now) {
+          +                let new = try await page(latest.key, api: api)
+          +                guard reading == nil else { return false }
+          +                if seen != latest.key || needsPushedPage {
+          +                    letterExpires = now.addingTimeInterval(3600)
+          +                    // iOS can defer starting an activity in the background.
+          +                    // Re-offer the latest chapter when the owner next opens Loki.
+          +                    if UIApplication.shared.applicationState == .active || needsPushedPage {
+          +                        defaults.set(latest.key, forKey: cursor)
+          +                    }
+          +                }
+          +                letter = new
+          +                finished = nil
+          +                await LokiIsland.shared.show(kind: .desk, key: latest.key, phase: "letter", title: new.chapter.title,
+          +                    detail: new.chapter.first, action: new.chapter.playable ? .readChapter : nil,
+          +                    token: latest.key, staleAt: letterExpires)
+          +                return true
+          +            }
+          +        } catch { /* A failed refresh has no effect on actual reading or the last saved cursor. */ }
+          +        return false
+          +    }
+          +
+          +    func read(_ key: String, api: MobileAPI) async throws {
+          +        let attempt = UUID()
+          +        loadRequest = attempt
+          +        let track = try await page(key, api: api)
+          +        guard loadRequest == attempt else { return }
+          +        try await start(track, api: api)
+          +    }
+          +
+          +    func handleIsland(_ action: LokiIslandAction, key: String, token: String) async throws {
+          +        let app = AppState.islandShared
+          +        guard app.paired, !app.callActive, !VoiceService.islandShared.recording, UIApplication.shared.isProtectedDataAvailable else {
+          +            throw LokiError.message("请打开 Loki 后再朗读。")
+          +        }
+          +        switch action {
+          +        case .readChapter:
+          +            guard key == token else { throw LokiError.message("这封信已经过期。") }
+          +            try await read(key, api: app.api)
+          +        case .oneMoreChapter:
+          +            guard reading?.chapter.key == key || finished?.chapter.key == key else {
+          +                throw LokiError.message("这次朗读已经结束。")
+          +            }
+          +            let actual = try await page(key, api: app.api)
+          +            guard let next = actual.next, next.playable, next.key == token else {
+          +                throw LokiError.message("下一章尚未录好。")
+          +            }
+          +            if reading?.chapter.key == key {
+          +                reading = actual
+          +                guard continuation.choose(token, readySuccessor: next.key) else { return }
+          +                await showReading(actual)
+          +            } else if finished?.chapter.key == key {
+          +                try await read(next.key, api: app.api)
+          +            }
+          +        default: throw LokiError.message("此操作不适用于书桌。")
+          +        }
+          +    }
+          +
+          +    private func start(_ page: ShelfPage, api: MobileAPI) async throws {
+          +        let app = AppState.islandShared, voice = VoiceService.islandShared
+          +        guard page.chapter.playable, let audio = page.chapter.recording, !app.callActive, !voice.recording,
+          +              app.paired, UIApplication.shared.isProtectedDataAvailable else { throw LokiError.message("这一章暂时不能朗读。") }
+          +        let attempt = UUID()
+          +        request = attempt
+          +        finished = nil; letter = nil; continuation = DeskChapterContinuation()
+          +        reading = page
+          +        voice.readDeskRecording(audio, api: api) { [weak self] ok in
+          +            Task { @MainActor in await self?.ended(ok, attempt: attempt, api: api) }
+          +        }
+          +        await showReading(page)
+          +    }
+          +
+          +    private func showReading(_ page: ShelfPage) async {
+          +        let next = page.next.flatMap { $0.playable && $0.key != continuation.queued ? $0 : nil }
+          +        await LokiIsland.shared.show(kind: .desk, key: page.chapter.key, phase: "reading",
+          +            title: page.chapter.title, detail: "Chapter \(page.chapter.number)",
+          +            action: next == nil ? nil : .oneMoreChapter, token: next?.key ?? "",
+          +            staleAt: Date().addingTimeInterval(3600))
+          +    }
+          +
+          +    private func ended(_ naturally: Bool, attempt: UUID, api: MobileAPI) async {
+          +        guard attempt == request, let track = reading else { return }
+          +        reading = nil
+          +        guard naturally else {
+          +            _ = continuation.finish(naturally: false, readySuccessor: nil)
+          +            await LokiIsland.shared.hide(.desk, key: track.chapter.key)
+          +            return
+          +        }
+          +        finished = track
+          +        // AVAudioPlayer has finished the last real part, not just its download.
+          +        let actual = (try? await page(track.chapter.key, api: api)) ?? track
+          +        guard attempt == request else { return }
+          +        let successor = actual.next.flatMap { $0.playable ? $0.key : nil }
+          +        let target = continuation.finish(naturally: true, readySuccessor: successor)
+          +        if let next = actual.next, next.playable {
+          +            if next.key == target {
+          +                do { try await read(next.key, api: api); return } catch {}
+          +            }
+          +            finished = actual
+          +            await LokiIsland.shared.show(kind: .desk, key: track.chapter.key, phase: "letter",
+          +                title: track.chapter.title, detail: "Chapter \(track.chapter.number) · End",
+          +                action: .oneMoreChapter, token: next.key, staleAt: Date().addingTimeInterval(600))
+          +        } else {
+          +            await LokiIsland.shared.hide(.desk, key: track.chapter.key)
+          +        }
+          +    }
+          +}
+          --- a/Sources/App/DeskView.swift
+          +++ b/Sources/App/DeskView.swift
+          @@ -58,6 +58,7 @@
+           
+           struct DeskView: View {
+               @EnvironmentObject private var app: AppState
+          +    @ObservedObject private var island = DeskIslandReader.shared
+               @Environment(\.scenePhase) private var phase
+               @State private var envelope: DeskEnvelope?
+               @State private var refreshing = false
+          @@ -125,6 +126,9 @@
+                           }
+                       }
+                   }.tint(LokiDesign.gold)
+          +        .sheet(item: $island.destination) { destination in
+          +            DeskChapterLanding(key: destination.id)
+          +        }
+               }
+           
+               private func shelfLink(_ shelf: DeskShelf, count: Int, icon: String, desk: DeskData) -> some View {
+          @@ -280,7 +284,8 @@
+                                           } else {
+                                               Text(.init(chapter.body)).lineSpacing(5).textSelection(.enabled)
+                                           }
+          -                                DeskPlayButton(recording: chapter.narration)
+          +                                DeskPlayButton(recording: chapter.narration,
+          +                                               key: revision.kind == "original" ? "\(revision.id).\(entry.offset)" : nil)
+                                       }
+                                   } else {
+                                       Text(.init(revision.body)).lineSpacing(5).textSelection(.enabled)
+          @@ -300,6 +305,7 @@
+           
+           private struct DeskPlayButton: View {
+               let recording: DeskRecording?
+          +    var key: String? = nil
+               @EnvironmentObject private var app: AppState
+               @EnvironmentObject private var voice: VoiceService
+               private var active: Bool {
+          @@ -310,6 +316,12 @@
+                   if let recording, recording.ready, !recording.parts.isEmpty {
+                       Button {
+                           if active { voice.stopPlayback() }
+          +                else if let key {
+          +                    Task {
+          +                        do { try await DeskIslandReader.shared.read(key, api: app.api) }
+          +                        catch { app.tell(error) }
+          +                    }
+          +                }
+                           else { voice.readDeskRecording(recording, api: app.api) }
+                       } label: {
+                           Label(active ? "停止朗读" : "播放朗读", systemImage: active ? "stop.circle" : "play.circle")
+          @@ -322,6 +334,43 @@
+               }
+           }
+           
+          +private struct DeskChapterLanding: View {
+          +    let key: String
+          +    @EnvironmentObject private var app: AppState
+          +    @Environment(\.dismiss) private var dismiss
+          +    @State private var envelope: DeskEnvelope?
+          +    @State private var unavailable = false
+          +    var body: some View {
+          +        NavigationStack {
+          +            ScrollView {
+          +                if let data = envelope?.data {
+          +                    let ids = key.split(separator: ".").compactMap { Int($0) }
+          +                    if ids.count == 2, let revision = data.revisions.first(where: { $0.id == ids[0] && $0.kind == "original" }),
+          +                       let project = data.projects.first(where: { $0.id == revision.project_id }),
+          +                       let parts = revision.chapters, parts.indices.contains(ids[1]) {
+          +                        let chapter = parts[ids[1]]
+          +                        VStack(alignment: .leading, spacing: 16) {
+          +                            Text(project.title).font(.title)
+          +                            if let number = chapter.number { Text("第 \(number) 章").font(.headline) }
+          +                            DeskPlayButton(recording: chapter.narration, key: key)
+          +                            Text(chapter.body).textSelection(.enabled).lineSpacing(5)
+          +                        }.padding()
+          +                    } else { Text("这一章暂时无法读取。") }
+          +                } else if unavailable { Text("未能读取这一章。") }
+          +                else { ProgressView() }
+          +            }
+          +            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
+          +        }
+          +        .task(id: key) {
+          +            envelope = await DeskSync.shared.cached()
+          +            do {
+          +                try await DeskSync.shared.refresh(api: app.api)
+          +                envelope = await DeskSync.shared.cached()
+          +            } catch { unavailable = true }
+          +        }
+          +    }
+          +}
+          +
+           private extension View {
+               func deskPaper() -> some View {
+                   padding(16).frame(maxWidth: .infinity, alignment: .leading).lokiPanel()
+          --- /dev/null
+          +++ b/Sources/App/IslandReplayTarget.swift
+          @@ -0,0 +1,39 @@
+          +import Foundation
+          +
+          +enum IslandReplayTarget {
+          +    static func local(_ items: [ChatItem], request: UUID, line: String) -> ChatItem? {
+          +        let reply = items.lazy.filter { $0.role == "assistant" && $0.replyingTo == request }
+          +        if line.isEmpty { return reply.first }
+          +        guard let id = UUID(uuidString: line) else { return nil }
+          +        return reply.first { $0.id == id }
+          +    }
+          +
+          +    static func pinned(_ candidate: ChatItem, request: UUID, line: String, preview: String) -> ChatItem? {
+          +        if agrees(preview, with: candidate.displayText) { return candidate }
+          +        // A push preview can stop before the attribution in a grouped dialogue bubble.
+          +        // Only accept a complete, exact opening sentence of this already matched reply.
+          +        guard line.isEmpty, !preview.isEmpty, preview.count <= 240,
+          +              normalized(candidate.displayText).hasPrefix(normalized(preview)),
+          +              let last = preview.trimmingCharacters(in: CharacterSet(charactersIn: "”’\\\"'»")).last,
+          +              ".!?。！？".contains(last) else { return nil }
+          +        // Keep any performance cue that belongs to this sentence.
+          +        var phrase = ""
+          +        for char in candidate.voiceText {
+          +            phrase.append(char)
+          +            if char == preview.last, normalized(ChatItem(role: "assistant", text: phrase).displayText) == normalized(preview) {
+          +                var segment = ChatItem(role: "assistant", text: preview, id: request, speechText: phrase)
+          +                segment.replyingTo = request
+          +                return segment
+          +            }
+          +        }
+          +        return nil
+          +    }
+          +    private static func normalized(_ value: String) -> String {
+          +        value.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+          +    }
+          +    static func agrees(_ preview: String, with text: String) -> Bool {
+          +        guard !preview.isEmpty else { return false }
+          +        return preview == String(text.prefix(240)) || preview == IslandText.limit(text, bytes: 640)
+          +    }
+          +}
+          +
+          --- a/Sources/App/LokiApp.swift
+          +++ b/Sources/App/LokiApp.swift
+          @@ -2,13 +2,13 @@
+           
+           @main struct LokiApp: App {
+               @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+          -    @StateObject private var app = AppState()
+          +    @StateObject private var app = AppState.islandShared
+               @StateObject private var health = HealthService.shared
+               @StateObject private var notifications = NotificationService()
+               @StateObject private var focus = FocusService()
+               @StateObject private var alarms = AlarmService()
+               @StateObject private var device = DeviceTools()
+          -    @StateObject private var voice = VoiceService()
+          +    @StateObject private var voice = VoiceService.islandShared
+               @StateObject private var call = CallSession()
+               @StateObject private var music = MusicService.shared
+               @StateObject private var shopping = ShoppingService.shared
+          @@ -92,9 +92,28 @@
+                               do { try await Task.sleep(for: .seconds(15)) } catch { return }
+                           }
+                       }
+          -            .onChange(of: voice.playing) { _, value in Task { await ChatLiveActivity.shared.speaking(value) } }
+          +            .task(id: app.unlocked && app.paired && phase == .active) {
+          +                guard app.unlocked && app.paired && phase == .active else { return }
+          +                while !Task.isCancelled {
+          +                    async let desk = DeskIslandReader.shared.refresh(api: app.api)
+          +                    async let busy: Void = BusyIslandAgreement.shared.refresh(api: app.api)
+          +                    _ = await (desk, busy)
+          +                    do { try await Task.sleep(for: .seconds(30)) } catch { break }
+          +                }
+          +            }
+          +            .onChange(of: app.paired) { _, paired in
+          +                if !paired { Task { await LokiIsland.shared.endAll(); await ChatLiveActivity.shared.end() } }
+          +            }
+                       .onOpenURL { url in
+          -                if url.scheme == "loki", url.host == "chat" {
+          +                guard url.scheme == "loki" else { return }
+          +                if url.host == "desk" {
+          +                    let key = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "item" }?.value ?? ""
+          +                    DeskIslandReader.shared.open(key: key)
+          +                } else if url.host == "music" {
+          +                    app.selectedTab = 1
+          +                    app.showIslandMusic = true
+          +                } else if url.host == "busy" { app.selectedTab = 0 }
+          +                else if url.host == "chat" {
+                               ChatNotificationInbox().tapped(replyID: UUID(uuidString: url.lastPathComponent))
+                               app.selectedTab = 0
+                               if app.unlocked && phase == .active {
+          @@ -135,6 +154,7 @@
+                       }
+                       .task(id: app.unlocked && phase == .active) {
+                           guard app.unlocked && phase == .active else { return }
+          +                music.islandBecameActive()
+                           if !music.connected { try? await music.restore() }
+                           while !Task.isCancelled {
+                               await app.refreshMusicCompanion(voice: voice)
+          @@ -181,6 +201,11 @@
+                               DeskView().tabItem { Label("书桌", systemImage: "books.vertical") }.tag(3)
+                               SettingsView().tabItem { Label("设置", systemImage: "gearshape") }.tag(4)
+                           }
+          +                .sheet(isPresented: $app.showIslandMusic) {
+          +                    NavigationStack { MusicView().toolbar {
+          +                        ToolbarItem(placement: .confirmationAction) { Button("完成") { app.showIslandMusic = false } }
+          +                    } }
+          +                }
+                       }
+                   }
+                   .task { if !chatLock { app.unlocked = true } }
+          --- /dev/null
+          +++ b/Sources/App/LokiIsland.swift
+          @@ -0,0 +1,71 @@
+          +import ActivityKit
+          +import UIKit
+          +
+          +@MainActor final class LokiIsland {
+          +    static let shared = LokiIsland()
+          +    private typealias Moment = Activity<LokiMomentAttributes>
+          +    private var tails: [LokiIslandKind: (UUID, Task<Void, Never>)] = [:]
+          +
+          +    private func serial(_ kind: LokiIslandKind, operation: @escaping @MainActor () async -> Void) async {
+          +        let previous = tails[kind]?.1, id = UUID()
+          +        let task = Task { @MainActor in
+          +            await previous?.value
+          +            await operation()
+          +        }
+          +        tails[kind] = (id, task)
+          +        await task.value
+          +        if tails[kind]?.0 == id { tails[kind] = nil }
+          +    }
+          +
+          +    func show(kind: LokiIslandKind, key: String, phase: String, title: String, detail: String,
+          +              note: String = "", action: LokiIslandAction? = nil, token: String = "",
+          +              until: Date? = nil, staleAt: Date) async {
+          +        guard !key.isEmpty, key.utf8.count <= 256 else { return }
+          +        await serial(kind) {
+          +            guard ChatLiveActivity.shared.enabled, ActivityAuthorizationInfo().areActivitiesEnabled,
+          +                  AppState.islandShared.paired, staleAt > Date() else { return }
+          +            let validToken = token.utf8.count <= 768
+          +            let state = LokiMomentAttributes.ContentState(key: key, phase: phase,
+          +                title: IslandText.limit(title, bytes: 280), detail: IslandText.limit(detail, bytes: 600),
+          +                note: IslandText.limit(note, bytes: 160), action: validToken ? action : nil,
+          +                token: validToken ? token : "", until: until)
+          +            let score = kind == .busy ? 10.0 : (phase == "reading" || phase == "playing" ? 65 : 40)
+          +            let content = ActivityContent(state: state, staleDate: staleAt, relevanceScore: score)
+          +            let matches = Moment.activities.filter { $0.attributes.kind == kind && [.active, .stale].contains($0.activityState) }
+          +            if let current = matches.first(where: { $0.content.state.key == key && $0.content.state.phase == phase })
+          +                ?? matches.first(where: { $0.content.state.key == key }) ?? matches.first {
+          +                for duplicate in matches where duplicate.id != current.id { await duplicate.end(nil, dismissalPolicy: .immediate) }
+          +                let age = current.content.staleDate?.timeIntervalSinceNow ?? 0
+          +                if current.content.state != state || age < 12 || abs((current.content.staleDate ?? .distantPast).timeIntervalSince(staleAt)) > 45 {
+          +                    await current.update(content)
+          +                }
+          +            } else if UIApplication.shared.applicationState == .active {
+          +                _ = try? Moment.request(attributes: .init(kind: kind), content: content, pushType: nil)
+          +            }
+          +        }
+          +    }
+          +
+          +    func hide(_ kind: LokiIslandKind, key: String? = nil) async {
+          +        await serial(kind) {
+          +            for item in Moment.activities where item.attributes.kind == kind && (key == nil || item.content.state.key == key) {
+          +                await item.end(nil, dismissalPolicy: .immediate)
+          +            }
+          +        }
+          +    }
+          +
+          +    func endAll() async {
+          +        for kind in LokiIslandKind.allCases { await hide(kind) }
+          +    }
+          +
+          +    func perform(_ action: LokiIslandAction, key: String, token: String) async throws {
+          +        guard ChatLiveActivity.shared.enabled, AppState.islandShared.paired, UIApplication.shared.isProtectedDataAvailable else {
+          +            throw LokiError.message("Unlock your iPhone and open Loki to continue.")
+          +        }
+          +        switch action {
+          +        case .bookmark: try await MusicService.shared.handleIslandBookmark(key: key, token: token)
+          +        case .readChapter, .oneMoreChapter: try await DeskIslandReader.shared.handleIsland(action, key: key, token: token)
+          +        case .extendBusy: try await BusyIslandAgreement.shared.extend(key: key, token: token)
+          +        }
+          +    }
+          +}
+          +
+          --- a/Sources/App/MusicModels.swift
+          +++ b/Sources/App/MusicModels.swift
+          @@ -22,6 +22,26 @@
+               let name: String
+               let count: Int
+           }
+          +struct MusicMoment: Codable, Identifiable, Equatable {
+          +    let id: UUID
+          +    let epoch: UUID
+          +    let segment: String
+          +    let song_id: String
+          +    let title: String
+          +    let artist: String
+          +    let position_ms: Int
+          +    let duration_ms: Int
+          +    let lyric: String
+          +    let marked_at: Double
+          +    var synced: Bool = false
+          +
+          +    var clock: String { String(format: "%d:%02d", position_ms / 60000, position_ms / 1000 % 60) }
+          +    var payload: [String: Any] {
+          +        ["id": id.uuidString, "epoch": epoch.uuidString, "segment": segment, "song_id": song_id,
+          +         "title": title, "artist": artist, "position_ms": position_ms, "duration_ms": duration_ms,
+          +         "lyric": lyric, "marked_at": marked_at]
+          +    }
+          +}
+           struct MusicAction: Decodable {
+               let id: UUID
+               let action: String
+          @@ -31,6 +51,7 @@
+               let playlist_id: String?
+               let name: String?
+               let success_comment: String?
+          +    let moment: MusicMoment?
+               let expires: Double
+           }
+           struct MusicEvent: Identifiable {
+          --- /dev/null
+          +++ b/Sources/App/MusicMoment.swift
+          @@ -0,0 +1,66 @@
+          +import Foundation
+          +
+          +struct MusicLyricLine: Equatable {
+          +    let startMS: Int
+          +    let text: String
+          +}
+          +
+          +struct MusicLyricTimeline {
+          +    let lines: [MusicLyricLine]
+          +    private static let stamp = try! NSRegularExpression(pattern: #"\[(\d{1,3}):([0-5]\d)(?:[.:](\d{1,3}))?\]"#)
+          +    private static let offset = try! NSRegularExpression(pattern: #"(?im)^\s*\[offset:\s*([+-]?\d{1,7})\s*\]"#)
+          +
+          +    init(_ lrc: String = "") {
+          +        let document = lrc as NSString
+          +        let match = Self.offset.firstMatch(in: lrc, range: NSRange(location: 0, length: document.length))
+          +        let adjustment = match.flatMap { Int(document.substring(with: $0.range(at: 1))) } ?? 0
+          +        var byTime: [Int: String] = [:]
+          +        for raw in lrc.components(separatedBy: .newlines) {
+          +            let source = raw as NSString
+          +            let stamps = Self.stamp.matches(in: raw, range: NSRange(location: 0, length: source.length))
+          +            guard let last = stamps.last else { continue }
+          +            let text = String(source.substring(from: NSMaxRange(last.range)).trimmingCharacters(in: .whitespaces).prefix(220))
+          +            for stamp in stamps {
+          +                guard let minutes = Int(source.substring(with: stamp.range(at: 1))),
+          +                      let seconds = Int(source.substring(with: stamp.range(at: 2))) else { continue }
+          +                let fraction = stamp.range(at: 3)
+          +                let digits = fraction.location == NSNotFound ? "" : source.substring(with: fraction)
+          +                let ms = Int((digits + "000").prefix(3)) ?? 0
+          +                let start = max(0, (minutes * 60 + seconds) * 1000 + ms - adjustment)
+          +                if byTime[start] == nil || byTime[start]?.isEmpty == true { byTime[start] = text }
+          +            }
+          +        }
+          +        lines = byTime.keys.sorted().map { MusicLyricLine(startMS: $0, text: byTime[$0] ?? "") }
+          +    }
+          +
+          +    func line(at ms: Int) -> MusicLyricLine? {
+          +        var low = 0, high = lines.count
+          +        while low < high {
+          +            let mid = low + (high - low) / 2
+          +            if lines[mid].startMS <= ms { low = mid + 1 } else { high = mid }
+          +        }
+          +        guard low > 0, !lines[low - 1].text.isEmpty else { return nil }
+          +        return lines[low - 1]
+          +    }
+          +
+          +    func token(at ms: Int) -> String {
+          +        if let line = line(at: ms) { return "line-\(line.startMS)" }
+          +        return "time-\(max(0, ms) / 15000 * 15000)"
+          +    }
+          +
+          +    // An old rendered button may arrive after the next line starts. Preserve the line
+          +    // the owner saw. The caller also checks the playback epoch, including repeat-one.
+          +    func capture(token: String, now: Int, duration: Int) -> (Int, String)? {
+          +        let parts = token.split(separator: "-", maxSplits: 1)
+          +        guard parts.count == 2, let start = Int(parts[1]), start >= 0, start <= duration else { return nil }
+          +        let position = self.token(at: now) == token ? min(now, duration) : start
+          +        switch parts[0] {
+          +        case "line":
+          +            guard let line = line(at: start), line.startMS == start else { return nil }
+          +            return (position, line.text)
+          +        case "time" where start % 15000 == 0: return (position, "")
+          +        default: return nil
+          +        }
+          +    }
+          +}
+          +
+          --- a/Sources/App/MusicService.swift
+          +++ b/Sources/App/MusicService.swift
+          @@ -37,6 +37,7 @@
+               private var cursor = 0
+               private(set) var epoch = UUID()
+               private var announcedStart = false
+          +    private var queueFinished = false
+               private var offerStartConversation = true
+               private var milestone = 0
+               private var speaking = false
+          @@ -53,6 +54,14 @@
+               private var callMusic: CallMusicSnapshot?
+               private var restoringCallMusic = false
+               private var lyrics = ""
+          +    private var timeline = MusicLyricTimeline()
+          +    private var lastIslandPresentation: [String] = []
+          +    private var islandUpdate: Task<Void, Never>?
+          +    private let momentsFile = "remembered-music-moments.json"
+          +    @Published private(set) var rememberedMoments: [MusicMoment] = []
+          +    private var loadedMoments = false
+          +    private var sendingMoments = false
+          +    private var retryMomentsAfter = Date.distantPast
+               private var events: [MusicEvent] = []
+               private var lastOpportunity = Date.distantPast
+               private var recentComments: [String] = []
+          @@ -96,8 +105,10 @@
+                   guard generation == authorizationEpoch else { throw CancellationError() }
+                   uid = account.0; nickname = account.1; connected = true
+                   status = "已连接 · \(account.1)"
+          +        retryMomentSync()
+               }
+               func prepareForChat() async {
+          +        retryMomentSync()
+                   guard !connected, !MusicCredential.read().isEmpty else { return }
+                   if let restoreTask { _ = try? await restoreTask.value; return }
+                   let task = Task { @MainActor in try await self.restore() }
+          @@ -124,13 +135,15 @@
+                   queue = songs; cursor = index; remember(songs); shuffleRemaining = []
+                   await play(songs[index], offerStart: offerStart)
+               }
+          -    private func play(_ song: MusicSong, offerStart: Bool = true) async {
+          -        let generation = UUID(); epoch = generation
+          +    private func play(_ song: MusicSong, offerStart: Bool = true, generation: UUID = UUID(), startAt: Int? = nil) async {
+          +        epoch = generation
+          +        queueFinished = false
+                   player.pause(); player.replaceCurrentItem(with: nil); playing = false; announcedStart = false; milestone = 0
+          -        current = song; elapsed = 0; duration = song.duration; lyrics = ""
+          +        current = song; elapsed = 0; duration = song.duration; lyrics = ""; timeline = MusicLyricTimeline()
+                   offerStartConversation = offerStart
+                   playbackPending = true; playbackFailure = nil; error = nil
+                   status = "正在打开歌曲…"
+          +        updateIsland()
+                   do {
+                       let url = try await client.playable(song.id)
+                       guard epoch == generation, connected else { return }
+          @@ -150,22 +163,36 @@
+                               if state == .failed {
+                                   let note = MusicPlaybackPolicy.playerError(self.player.currentItem?.error as NSError?)
+                                   self.pause(); self.status = "歌曲播放失败"; self.playbackFailure = note; self.error = note
+          +                        self.updateIsland()
+                               }
+                           }
+                       }
+          -            player.replaceCurrentItem(with: item); player.volume = speaking ? min(musicGain, 0.18) : musicGain; player.play()
+          +            player.replaceCurrentItem(with: item); player.volume = speaking ? min(musicGain, 0.18) : musicGain
+          +            if let startAt {
+          +                let reached = await item.seek(to: CMTime(value: Int64(startAt), timescale: 1000), toleranceBefore: .zero, toleranceAfter: .zero)
+          +                guard epoch == generation else { return }
+          +                guard reached else { throw LokiError.message("未能定位到保存的时间。") }
+          +            }
+          +            player.play()
+                       Task { [weak self, client] in
+                           let value = try? await client.lyrics(song.id)
+                           guard let self, self.epoch == generation else { return }
+                           self.lyrics = value ?? ""
+          +                self.timeline = MusicLyricTimeline(self.lyrics)
+          +                self.updateIsland()
+                       }
+                   } catch {
+                       guard epoch == generation else { return }
+                       pause(); status = "未能播放这首歌"; playbackFailure = error.localizedDescription; self.error = error.localizedDescription
+          +            updateIsland()
+                   }
+               }
+               func resume() async {
+          -        guard current != nil else { return }
+          +        guard let song = current else { return }
+          +        if queueFinished {
+          +            await play(song, offerStart: false)
+          +            return
+          +        }
+                   do { try await PhoneAudioSession.shared.musicPlayback(); player.play() }
+                   catch { self.error = error.localizedDescription }
+               }
+          @@ -174,10 +201,14 @@
+                   player.pause(); playing = false; playbackPending = false
+                   PhoneAudioSession.shared.musicStopped()
+                   updateNowPlaying()
+          +        updateIsland()
+               }
+               func stop() {
+          +        let stopped = epoch.uuidString
+                   epoch = UUID(); pause(); player.replaceCurrentItem(with: nil)
+                   current = nil; elapsed = 0; events = []
+          +        islandUpdate?.cancel(); lastIslandPresentation = []
+          +        Task { await LokiIsland.shared.hide(.music, key: stopped) }
+                   MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+               }
+               func next(offerStart: Bool = true) async {
+          @@ -192,7 +223,13 @@
+                       if mode == .shuffle && !shuffleRemaining.isEmpty { shuffleRemaining.removeLast() }
+                       let repeatedSameSong = ended && index == cursor
+                       cursor = index; await play(queue[index], offerStart: offerStart && !repeatedSameSong)
+          -        } else { pause(); status = "本次队列已播放完" }
+          +        } else {
+          +            queueFinished = true
+          +            pause(); status = "本次队列已播放完"
+          +            islandUpdate?.cancel()
+          +            lastIslandPresentation = []
+          +            await LokiIsland.shared.hide(.music, key: epoch.uuidString)
+          +        }
+               }
+               func setMode(_ value: MusicPlaybackMode) {
+                   mode = value; shuffleRemaining = []
+          @@ -269,6 +306,7 @@
+                       }
+                   } else if value == .waitingToPlayAtSpecifiedRate { playbackPending = true; status = "正在缓冲歌曲…" }
+                   updateNowPlaying()
+          +        updateIsland()
+               }
+               private func tick(_ seconds: Double) {
+                   guard current != nil, seconds.isFinite else { return }
+          @@ -279,6 +317,114 @@
+                       milestone = Int(elapsed / 60) + 1; offer("progress", song: song)
+                   }
+                   updateNowPlaying()
+          +        updateIsland()
+          +    }
+          +    private var playheadMS: Int {
+          +        let value = player.currentTime().seconds
+          +        return Int(max(0, min(86400, value.isFinite ? value : elapsed)) * 1000)
+          +    }
+          +
+          +    var currentLyric: String { timeline.line(at: playheadMS)?.text ?? "" }
+          +
+          +    func islandBecameActive() {
+          +        retryMomentSync()
+          +        lastIslandPresentation = []
+          +        updateIsland()
+          +    }
+          +
+          +    private func updateIsland() {
+          +        guard let song = current, !queueFinished else { return }
+          +        let key = epoch.uuidString
+          +        let phase = playbackFailure != nil ? "failed" : playbackPending ? "buffering" : playing ? "playing" : "paused"
+          +        let position = playheadMS
+          +        let lyric = timeline.line(at: position)?.text ?? ""
+          +        let token = announcedStart && playbackFailure == nil && duration > 0 ? timeline.token(at: position) : ""
+          +        let saved = token.isEmpty ? nil : rememberedMoments.first { $0.epoch == epoch && $0.segment == token }
+          +        let note = saved.map { $0.synced ? "Moment remembered" : "Saved on this iPhone" } ?? song.artist
+          +        let signature = [key, phase, token, lyric, note]
+          +        guard signature != lastIslandPresentation else { return }
+          +        lastIslandPresentation = signature
+          +        islandUpdate?.cancel()
+          +        islandUpdate = Task { @MainActor in
+          +            guard !Task.isCancelled, self.lastIslandPresentation == signature else { return }
+          +            await LokiIsland.shared.show(kind: .music, key: key, phase: phase, title: song.title,
+          +                detail: lyric, note: note, action: token.isEmpty || saved != nil ? nil : .bookmark,
+          +                token: token, staleAt: Date().addingTimeInterval(phase == "paused" ? 8 * 3600 : max(120, duration - elapsed + 60)))
+          +        }
+          +    }
+          +
+          +    private func loadMoments() throws {
+          +        guard !loadedMoments else { return }
+          +        let url = try PrivateFiles.url(momentsFile)
+          +        do { rememberedMoments = try JSONDecoder().decode([MusicMoment].self, from: Data(contentsOf: url)) }
+          +        catch let error as CocoaError where error.code == .fileReadNoSuchFile { rememberedMoments = [] }
+          +        loadedMoments = true
+          +    }
+          +
+          +    func handleIslandBookmark(key: String, token: String) async throws {
+          +        try loadMoments()
+          +        guard let song = current, key == epoch.uuidString, !queueFinished, announcedStart, duration.isFinite, duration > 0,
+          +              playbackFailure == nil,
+          +              let (position, lyric) = timeline.capture(token: token, now: playheadMS, duration: Int(min(86400, duration) * 1000)) else {
+          +            throw LokiError.message("这段播放已结束，请展开当前歌曲再收藏。")
+          +        }
+          +        if !rememberedMoments.contains(where: { $0.epoch == epoch && $0.segment == token }) {
+          +            let moment = MusicMoment(id: UUID(), epoch: epoch, segment: token, song_id: song.id,
+          +                title: String(song.title.prefix(200)), artist: String(song.artist.prefix(200)), position_ms: position,
+          +                duration_ms: Int(min(86400, duration) * 1000), lyric: lyric, marked_at: Date().timeIntervalSince1970)
+          +            let updated = [moment] + rememberedMoments
+          +            try PrivateFiles.save(updated, momentsFile)
+          +            rememberedMoments = updated
+          +        }
+          +        updateIsland()
+          +        retryMomentSync()
+          +    }
+          +
+          +    func retryMomentSync() {
+          +        guard !sendingMoments, Date() >= retryMomentsAfter else { return }
+          +        do { try loadMoments() } catch { return }
+          +        guard rememberedMoments.contains(where: { !$0.synced }),
+          +              let base = UserDefaults.standard.string(forKey: "gatewayURL"), !SecureToken.read().isEmpty else { return }
+          +        sendingMoments = true
+          +        let api = MobileAPI(base: base, token: SecureToken.read())
+          +        Task { @MainActor in
+          +            defer { sendingMoments = false }
+          +            do {
+          +                while let next = rememberedMoments.last(where: { !$0.synced }) {
+          +                    let data = try await api.data("/v1/music/moments", next.payload, timeout: 10)
+          +                    struct Receipt: Decodable { let stored: Bool; let id: UUID }
+          +                    let receipt = try JSONDecoder().decode(Receipt.self, from: data)
+          +                    guard receipt.stored, receipt.id == next.id,
+          +                          let index = rememberedMoments.firstIndex(where: { $0.id == next.id }) else {
+          +                        throw LokiError.message("音乐片段还未确认同步。")
+          +                    }
+          +                    var updated = rememberedMoments
+          +                    updated[index].synced = true
+          +                    try PrivateFiles.save(updated, momentsFile)
+          +                    rememberedMoments = updated
+          +                    updateIsland()
+          +                }
+          +            } catch { retryMomentsAfter = Date().addingTimeInterval(30) }
+          +        }
+          +    }
+          +
+          +    func playMoment(_ moment: MusicMoment) async throws {
+          +        guard connected else { throw LokiError.message("请先连接网易云。") }
+          +        let track = MusicSong(id: moment.song_id, title: moment.title, artist: moment.artist, duration: Double(moment.duration_ms) / 1000)
+          +        let requested: UUID
+          +        if current?.id == track.id, !queueFinished, let item = player.currentItem, playbackFailure == nil {
+          +            requested = epoch
+          +            let position = CMTime(value: Int64(moment.position_ms), timescale: 1000)
+          +            let finished = await item.seek(to: position, toleranceBefore: .zero, toleranceAfter: .zero)
+          +            guard finished, requested == epoch, item === player.currentItem else { throw CancellationError() }
+          +            await resume()
+          +        } else {
+          +            requested = UUID()
+          +            queue = [track]; cursor = 0; shuffleRemaining = []; remember([track])
+          +            await play(track, offerStart: false, generation: requested, startAt: moment.position_ms)
+          +            guard requested == epoch else { throw CancellationError() }
+          +        }
+          +        guard try await confirmPlayback(), requested == epoch else { throw LokiError.message("尚未确认片段播放。") }
+               }
+               private func updateNowPlaying() {
+                   guard let song = current else { return }
+          @@ -293,6 +439,7 @@
+                   events = Array(events.suffix(2))
+               }
+               func takeEvent() -> MusicEvent? {
+          +        retryMomentSync()
+                   // A delayed start/progress from a replaced song is not a new conversation.
+                   events.removeAll { $0.kind != "ended" && $0.epoch != epoch }
+                   guard connected, companion, !events.isEmpty else { return nil }
+          @@ -310,6 +457,7 @@
+                   value["catalog"] = known.values.prefix(20).map { ["id": $0.id, "title": $0.title, "artist": $0.artist] }
+                   value["playlists"] = knownPlaylists.prefix(20).map { ["id": $0.id, "name": $0.name] }
+                   if !lyrics.isEmpty { value["lyrics_excerpt"] = String(lyrics.prefix(1800)) }
+          +        value["moment_replay_available"] = true
+                   return value
+               }
+               func apply(_ action: MusicAction) async -> (Bool, String) {
+          @@ -320,6 +468,9 @@
+                   catch { return (false, "无法保存音乐操作记录，未执行。") }
+                   do {
+                       switch action.action {
+          +            case "replay_moment":
+          +                guard let moment = action.moment else { throw LokiError.message("未找到已保存的歌曲片段。") }
+          +                try await playMoment(moment)
+                       case "set_mode":
+                           guard let raw = action.mode, let value = MusicPlaybackMode(rawValue: raw) else { throw LokiError.message("不支持这个播放模式。") }
+                           setMode(value)
+          --- a/Sources/App/MusicView.swift
+          +++ b/Sources/App/MusicView.swift
+          @@ -30,6 +30,7 @@
+                               VStack(alignment: .leading, spacing: 12) {
+                                   Text(song.title).font(.headline)
+                                   Text(song.artist).font(.subheadline).foregroundStyle(.secondary)
+          +                        if !music.currentLyric.isEmpty { Text(music.currentLyric).font(.subheadline) }
+                                   Text(music.status).font(.caption).foregroundStyle(.secondary)
+                                   if music.duration > 0 {
+                                       Slider(value: $seek, in: 0...max(1, music.duration), onEditingChanged: { editing in if !editing { music.seek(seek) } })
+          @@ -59,6 +60,20 @@
+                           }
+                       }
+                       if music.connected {
+          +                if !music.rememberedMoments.isEmpty {
+          +                    Section("记住的片段") {
+          +                        ForEach(music.rememberedMoments) { moment in
+          +                            Button {
+          +                                load { try await music.playMoment(moment) }
+          +                            } label: {
+          +                                VStack(alignment: .leading, spacing: 3) {
+          +                                    Text("\(moment.title) · \(moment.clock)")
+          +                                    if !moment.lyric.isEmpty { Text(moment.lyric).font(.caption).lineLimit(2) }
+          +                                }
+          +                            }.accessibilityLabel("从 \(moment.clock) 播放 \(moment.title)")
+          +                        }
+          +                    }
+          +                }
+                           Section {
+                               HStack {
+                                   TextField("歌名或歌手", text: $query).submitLabel(.search).onSubmit { search() }
+          --- a/Sources/App/NetEaseClient.swift
+          +++ b/Sources/App/NetEaseClient.swift
+          @@ -124,7 +124,7 @@
+               }
+               func lyrics(_ song: String) async throws -> String {
+                   let result = try await request("/api/song/lyric", query: ["id": song, "lv": "1", "kv": "1", "tv": "-1"])
+          -        return String(((result["lrc"] as? [String: Any])?["lyric"] as? String ?? "").prefix(12000))
+          +        return (result["lrc"] as? [String: Any])?["lyric"] as? String ?? ""
+               }
+               func playable(_ song: String) async throws -> URL {
+                   sourceAttempts = []
+          --- a/Sources/App/Notifications.swift
+          +++ b/Sources/App/Notifications.swift
+          @@ -48,6 +48,14 @@
+           final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+               func application(_ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+                                fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
+          +        if userInfo["desk_changed"] as? Bool == true {
+          +            Task { @MainActor in
+          +                let app = AppState.islandShared
+          +                guard app.paired else { completionHandler(.noData); return }
+          +                completionHandler(await DeskIslandReader.shared.refresh(api: app.api) ? .newData : .noData)
+          +            }
+          +            return
+          +        }
+                   guard let route = ChatPushRoute(payload: userInfo) else {
+                       completionHandler(.noData); return
+                   }
+          @@ -58,6 +66,7 @@
+               }
+               func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+                   UNUserNotificationCenter.current().delegate = self
+          +        Task { @MainActor in DeskIslandPush.shared.observe() }
+                   HealthService.shared.restoreObserversOnLaunch()
+                   LocationService.shared.restoreAutomatic()
+                   return true
+          --- a/Sources/App/PCMPlayback.swift
+          +++ b/Sources/App/PCMPlayback.swift
+          @@ -11,6 +11,7 @@
+               private var active = false
+               private var interrupted = false
+               private let format = AVAudioFormat(standardFormatWithSampleRate: 24_000, channels: 1)!
+          +    var didBeginOutput: (() -> Void)?
+               var firstScheduled: (() -> Void)?
+               private var didSchedule = false
+               private var prebufferFrames = 14_400 // 600 ms; adapts only after a real underrun.
+          @@ -72,6 +73,7 @@
+               }
+               private func beginPlayback() {
+                   node.play()
+          +        didBeginOutput?()
+                   if !didSchedule { didSchedule = true; firstScheduled?() }
+               }
+               func pauseForInterruption() {
+          --- a/Sources/App/SettingsView.swift
+          +++ b/Sources/App/SettingsView.swift
+          @@ -46,9 +46,10 @@
+                                   .font(.caption).foregroundStyle(.secondary)
+                           }
+                           Section("提醒与隐私") {
+          -                    Toggle("灵动岛显示聊天进度与回复", isOn: $liveChatEnabled)
+          +                    Toggle("显示 Loki 灵动岛活动", isOn: $liveChatEnabled)
+                                   .onChange(of: liveChatEnabled) { _, enabled in
+          -                            if !enabled { Task { await ChatLiveActivity.shared.end() } }
+          +                            Task { await DeskIslandPush.shared.sync() }
+          +                            if !enabled { Task { await ChatLiveActivity.shared.end(); await LokiIsland.shared.endAll() } }
+                                   }
+                               Toggle("回复后自动播放 Loki 原声", isOn: $autoVoice)
+                               Toggle("让 Loki 自己挑选聊天背景", isOn: $autoWallpaper)
+          --- a/Sources/App/VoiceService.swift
+          +++ b/Sources/App/VoiceService.swift
+          @@ -4,11 +4,22 @@
+           import UIKit
+           
+           @MainActor final class VoiceService: NSObject, ObservableObject, AVAudioPlayerDelegate {
+          +    static let islandShared = VoiceService()
+          +    private(set) var audibleReplyID: UUID? {
+          +        didSet {
+          +            guard oldValue != audibleReplyID else { return }
+          +            Task { @MainActor [weak self] in
+          +                guard let self else { return }
+          +                await ChatLiveActivity.shared.audible(self.audibleReplyID)
+          +            }
+          +        }
+          +    }
+               @Published var recording = false
+               @Published var playing = false
+               @Published private(set) var playingMessageID: UUID?
+               @Published private(set) var finishedReplyID: UUID?
+               @Published private(set) var deskReadingKey: String?
+          +    private var deskCompletion: ((Bool) -> Void)?
+               private var currentReplyID: UUID?
+               @Published var draftRecording: RecordedVoice?
+               @Published var recordingSeconds: Double = 0
+          @@ -42,6 +53,7 @@
+                   if type == .began {
+                       interruptionRecovery?.cancel(); interruptionRecovery = nil
+                       audioSession.interruptionBegan()
+          +            audibleReplyID = nil
+                       pcm.pauseForInterruption(); player?.pause()
+                       stopRecording(keep: !recordingForCall)
+                       if playing { streamStatus = "语音暂被系统中断，等待恢复…" }
+          @@ -61,6 +73,7 @@
+                               guard self.streamID == id else { return }
+                               try self.pcm.resumeAfterInterruption()
+                               if let player = self.player, !player.play() { throw LokiError.message("语音未能恢复播放，请双击消息重播。") }
+          +                    if self.player?.isPlaying == true { self.audibleReplyID = self.currentReplyID }
+                               self.streamStatus = "Loki 正在说话"
+                           } catch {
+                               guard self.streamID == id else { return }
+          @@ -106,6 +119,7 @@
+                   guard player?.prepareToPlay() == true else { throw LokiError.message("无法准备这段录音，请重新播放。") }
+                   guard player?.play() == true else { throw LokiError.message("音频未能开始播放。") }
+                   playing = true
+          +        audibleReplyID = currentReplyID
+               }
+               func stopPlayback(releaseSession: Bool = true) {
+                   idleRelease?.cancel(); idleRelease = nil
+          @@ -117,18 +131,31 @@
+                   player?.stop(); player = nil; playing = false
+                   playingMessageID = nil
+                   deskReadingKey = nil
+          +        let interruptedDesk = deskCompletion
+          +        deskCompletion = nil
+          +        interruptedDesk?(false)
+                   currentReplyID = nil
+          +        audibleReplyID = nil
+                   synthesizer.stopSpeaking(at: .immediate)
+                   if releaseSession && !recording { audioSession.release() }
+               }
+          -    func readDeskRecording(_ recording: DeskRecording, api: MobileAPI) {
+          -        guard recording.ready, let key = recording.parts.first, !self.recording else { return }
+          +    func readDeskRecording(_ recording: DeskRecording, api: MobileAPI, completion: ((Bool) -> Void)? = nil) {
+          +        guard recording.ready, let key = recording.parts.first, !self.recording else { completion?(false); return }
+                   stopPlayback(releaseSession: false)
+                   let id = streamID
+                   deskReadingKey = key
+          +        deskCompletion = completion
+                   streamTask = Task { @MainActor [weak self] in
+                       guard let self else { return }
+          -            defer { if self.streamID == id { self.stopPlayback() } }
+          +            var completed = false
+          +            defer {
+          +                if self.streamID == id {
+          +                    let callback = self.deskCompletion
+          +                    self.deskCompletion = nil
+          +                    self.stopPlayback()
+          +                    callback?(completed)
+          +                }
+          +            }
+                       do {
+                           for part in recording.parts {
+                               let audio = try await DeskSync.shared.recording(part, api: api)
+          @@ -139,6 +166,7 @@
+                               let finished = await withCheckedContinuation { self.playbackCompletion = $0 }
+                               guard finished else { return }
+                           }
+          +                completed = true
+                       } catch {
+                           if self.streamID == id && !(error is CancellationError) { self.errorMessage = self.playbackError(error) }
+                       }
+          @@ -210,12 +238,17 @@
+                               playbackStage = "player_start"
+                               self.pcm = PCMPlayback()
+                               try self.pcm.start(); self.streamStatus = "等待首段原声…"
+          +                    self.pcm.didBeginOutput = { [weak self] in
+          +                        guard let self, self.streamID == id else { return }
+          +                        self.audibleReplyID = messageID
+          +                        self.streamStatus = "Loki 正在说话"
+          +                    }
+                               self.pcm.firstScheduled = { [weak self] in
+                                   let parts = started.duration(to: .now).components
+                                   firstScheduleMS = Double(parts.seconds) * 1000 + Double(parts.attoseconds) / 1e15
+                                   self?.streamStatus = "Loki 正在说话"
+                               }
+          -                    self.pcm.rebuffering = { [weak self] in self?.streamStatus = "正在缓冲原声…" }
+          +                    self.pcm.rebuffering = { [weak self] in self?.audibleReplyID = nil; self?.streamStatus = "正在缓冲原声…" }
+                               playbackStage = "stream"
+                           }
+                           let append: @MainActor (Data) async throws -> Void = { data in
+          @@ -244,7 +277,7 @@
+                               "first_packet_ready_ms": firstPacketMS ?? -1, "used_lookahead": prepared != nil,
+                               "first_schedule_ms": firstScheduleMS ?? -1, "player_duration_ms": totalMS,
+                               "underruns": underruns, "scope": "player_only_not_human_heard"]) { _, new in new }) }
+          -                self.pcm.stop(); self.playing = false; self.playingMessageID = nil; self.streamTask = nil
+          +                self.audibleReplyID = nil; self.pcm.stop(); self.playing = false; self.playingMessageID = nil; self.streamTask = nil
+                           if let messageID { try? OriginalVoiceCache.save(completePCM, messageID: messageID, text: text) }
+                           self.finishedReplyID = self.currentReplyID
+                           self.currentReplyID = nil
+          @@ -254,7 +287,7 @@
+                           guard self.streamID == id else { return }
+                           self.lookahead?.stream.cancel(); self.lookahead = nil
+                           self.consumingLookahead?.cancel(); self.consumingLookahead = nil
+          -                self.pcm.stop(); self.playing = false; self.playingMessageID = nil; self.streamTask = nil
+          +                self.audibleReplyID = nil; self.pcm.stop(); self.playing = false; self.playingMessageID = nil; self.streamTask = nil
+                           if !(error is CancellationError) {
+                               self.errorMessage = self.playbackError(error)
+                               let failure = error as NSError
+          --- a/Sources/LiveActivity/LokiChatActivityWidget.swift
+          +++ b/Sources/LiveActivity/LokiChatActivityWidget.swift
+          @@ -2,18 +2,19 @@
+           import SwiftUI
+           import WidgetKit
+           
+          -@main struct LokiChatActivityWidget: Widget {
+          +struct LokiChatActivityWidget: Widget {
+               private let gold = Color(red: 0.86, green: 0.74, blue: 0.48)
+           
+               var body: some WidgetConfiguration {
+                   ActivityConfiguration(for: LokiChatActivityAttributes.self) { context in
+                       HStack(alignment: .top, spacing: 14) {
+          -                Image(systemName: "sparkles").font(.title2).foregroundStyle(gold)
+          +                LokiSeal(pose: "chat", size: 27)
+                           VStack(alignment: .leading, spacing: 6) {
+                               Text("Loki").font(.system(.headline, design: .serif))
+                               Text(status(context.state, stale: context.isStale)).font(.caption).foregroundStyle(gold)
+                               if !context.state.preview.isEmpty {
+                                   Text(context.state.preview).font(.subheadline).lineLimit(3).privacySensitive()
+          +                        replay(context)
+                               }
+                           }
+                           Spacer(minLength: 0)
+          @@ -25,7 +26,7 @@
+                   } dynamicIsland: { context in
+                       DynamicIsland {
+                           DynamicIslandExpandedRegion(.leading) {
+          -                    Image(systemName: "sparkles").foregroundStyle(gold).padding(.leading, 5)
+          +                    LokiSeal(pose: "chat").padding(.leading, 5)
+                           }
+                           DynamicIslandExpandedRegion(.center) {
+                               Text("Loki").font(.system(.headline, design: .serif)).foregroundStyle(gold)
+          @@ -38,22 +39,30 @@
+                                   Text(status(context.state, stale: context.isStale)).font(.caption).foregroundStyle(gold)
+                                   if !context.state.preview.isEmpty {
+                                       Text(context.state.preview).font(.subheadline).lineLimit(3).privacySensitive()
+          +                        replay(context)
+                                   }
+                               }
+                               .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 6)
+                           }
+                       } compactLeading: {
+          -                Image(systemName: "sparkles").foregroundStyle(gold)
+          +                LokiSeal(pose: "chat")
+                       } compactTrailing: {
+                           Image(systemName: symbol(context.state, stale: context.isStale)).foregroundStyle(gold)
+                       } minimal: {
+          -                Image(systemName: "sparkles").foregroundStyle(gold)
+          +                LokiSeal(pose: "chat")
+                       }
+                       .widgetURL(URL(string: "loki://chat/" + context.attributes.requestID))
+                       .keylineTint(gold)
+                   }
+               }
+           
+          +    @ViewBuilder private func replay(_ context: ActivityViewContext<LokiChatActivityAttributes>) -> some View {
+          +        if !context.isStale && ["reply", "speaking"].contains(context.state.phase) {
+          +            Button(intent: LokiIslandAudioIntent("replay", context.attributes.requestID, context.state.lineID ?? "", preview: context.state.preview)) {
+          +                Label("Hear that again", systemImage: "arrow.counterclockwise")
+          +            }.buttonStyle(.bordered).tint(gold)
+          +        }
+          +    }
+               private func status(_ state: LokiChatActivityAttributes.ContentState, stale: Bool) -> String {
+                   if stale { return "Open Loki to continue" }
+                   switch state.phase {
+          --- /dev/null
+          +++ b/Sources/LiveActivity/LokiMomentWidget.swift
+          @@ -0,0 +1,148 @@
+          +import ActivityKit
+          +import SwiftUI
+          +import WidgetKit
+          +import AppIntents
+          +
+          +@main struct LokiWidgets: WidgetBundle {
+          +    var body: some Widget {
+          +        LokiChatActivityWidget()
+          +        LokiMomentWidget()
+          +    }
+          +}
+          +
+          +private let ink = Color(red: 0.035, green: 0.13, blue: 0.10)
+          +private let gold = Color(red: 0.91, green: 0.77, blue: 0.52)
+          +
+          +struct LokiSeal: View {
+          +    var pose: String
+          +    var size: CGFloat = 22
+          +    var body: some View {
+          +        Canvas { context, bounds in
+          +            let unit = min(bounds.width, bounds.height) / 24
+          +            context.scaleBy(x: unit, y: unit)
+          +            func line(_ points: [CGPoint], _ width: CGFloat = 1.35) {
+          +                var p = Path()
+          +                guard let first = points.first else { return }
+          +                p.move(to: first)
+          +                for point in points.dropFirst() { p.addLine(to: point) }
+          +                context.stroke(p, with: .color(gold), style: StrokeStyle(lineWidth: width, lineCap: .round, lineJoin: .round))
+          +            }
+          +            func pt(_ x: Int, _ y: Int) -> CGPoint { CGPoint(x: x, y: y) }
+          +            if pose == "letter" || pose == "arrived" {
+          +                let rect = CGRect(x: 2, y: 5, width: 20, height: 14)
+          +                context.fill(Path(roundedRect: rect, cornerRadius: 2.5), with: .color(ink))
+          +                context.stroke(Path(roundedRect: rect, cornerRadius: 2.5), with: .color(gold), lineWidth: 1.5)
+          +                line([pt(3,7), pt(12,13), pt(21,7)])
+          +                context.fill(Path(ellipseIn: CGRect(x: 10, y: 11, width: 4, height: 4)), with: .color(gold))
+          +            } else if pose == "writing" {
+          +                var feather = Path()
+          +                feather.move(to: pt(5,18)); feather.addQuadCurve(to: pt(21,2), control: pt(8,4))
+          +                feather.addQuadCurve(to: pt(5,18), control: pt(20,15)); feather.closeSubpath()
+          +                context.fill(feather, with: .color(ink)); context.stroke(feather, with: .color(gold), lineWidth: 1.5)
+          +                line([pt(3,21), pt(15,9)]); line([pt(10,21), pt(20,21)], 1)
+          +            } else {
+          +                var helm = Path()
+          +                helm.move(to: pt(3,2)); helm.addQuadCurve(to: pt(8,12), control: pt(2,9))
+          +                helm.addQuadCurve(to: pt(16,12), control: pt(12,9))
+          +                helm.addQuadCurve(to: pt(21,2), control: pt(22,8))
+          +                helm.addQuadCurve(to: pt(18,15), control: pt(22,13))
+          +                helm.addLine(to: pt(17,19)); helm.addLine(to: pt(12,22)); helm.addLine(to: pt(7,19))
+          +                helm.addLine(to: pt(6,15)); helm.addQuadCurve(to: pt(3,2), control: pt(1,11)); helm.closeSubpath()
+          +                context.fill(helm, with: .color(ink)); context.stroke(helm, with: .color(gold), lineWidth: 1.35)
+          +                line([pt(8,15), pt(12,17), pt(16,15)], 1.1)
+          +            }
+          +        }.frame(width: size, height: size).accessibilityHidden(true)
+          +    }
+          +}
+          +
+          +struct LokiMomentWidget: Widget {
+          +    private typealias State = LokiMomentAttributes.ContentState
+          +    private typealias Context = ActivityViewContext<LokiMomentAttributes>
+          +    var body: some WidgetConfiguration {
+          +        ActivityConfiguration(for: LokiMomentAttributes.self) { c in
+          +            HStack(alignment: .top, spacing: 13) {
+          +                LokiSeal(pose: c.state.phase, size: 30)
+          +                VStack(alignment: .leading, spacing: 6) {
+          +                    title(c); details(c); controls(c)
+          +                }
+          +                Spacer(minLength: 0)
+          +            }.padding(14).activityBackgroundTint(ink).activitySystemActionForegroundColor(gold)
+          +             .widgetURL(link(c))
+          +        } dynamicIsland: { c in
+          +            DynamicIsland {
+          +                DynamicIslandExpandedRegion(.leading) { LokiSeal(pose: c.state.phase, size: 23) }
+          +                DynamicIslandExpandedRegion(.center) { title(c) }
+          +                DynamicIslandExpandedRegion(.trailing) { status(c) }
+          +                DynamicIslandExpandedRegion(.bottom) {
+          +                    VStack(alignment: .leading, spacing: 6) { details(c); controls(c) }
+          +                        .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 6)
+          +                }
+          +            } compactLeading: { LokiSeal(pose: c.state.phase) }
+          +              compactTrailing: { status(c) }
+          +              minimal: { LokiSeal(pose: c.state.phase, size: 17) }
+          +              .keylineTint(gold).widgetURL(link(c))
+          +        }
+          +    }
+          +    private func link(_ c: Context) -> URL? {
+          +        var parts = URLComponents()
+          +        parts.scheme = "loki"; parts.host = c.attributes.kind.rawValue
+          +        if c.attributes.kind == .desk { parts.queryItems = [URLQueryItem(name: "item", value: c.state.key)] }
+          +        return parts.url
+          +    }
+          +    private func title(_ c: Context) -> some View {
+          +        Text(c.state.title).font(.system(.headline, design: .serif)).lineLimit(1).privacySensitive()
+          +    }
+          +    @ViewBuilder private func details(_ c: Context) -> some View {
+          +        if c.attributes.kind == .music && !c.isStale {
+          +            switch c.state.phase {
+          +            case "buffering": Text("Buffering").font(.caption).foregroundStyle(gold)
+          +            case "paused": Text("Paused").font(.caption).foregroundStyle(gold)
+          +            case "failed": Text("Playback interrupted").font(.caption).foregroundStyle(gold)
+          +            default: EmptyView()
+          +            }
+          +        }
+          +        if !(c.isStale && c.attributes.kind == .busy) && !c.state.detail.isEmpty {
+          +            Text(c.state.detail).font(.subheadline).lineLimit(2).privacySensitive()
+          +        }
+          +        if c.isStale { Text(c.attributes.kind == .busy ? "Your break has ended" : "Open Loki to refresh").font(.caption2).foregroundStyle(gold) }
+          +        else if !c.state.note.isEmpty { Text(c.state.note).font(.caption2).lineLimit(1).foregroundStyle(gold).privacySensitive() }
+          +    }
+          +    @ViewBuilder private func status(_ c: Context) -> some View {
+          +        if c.isStale {
+          +            Image(systemName: "clock").foregroundStyle(gold).accessibilityLabel("Last update")
+          +        } else if c.attributes.kind == .busy, let end = c.state.until, end > Date() {
+          +            Text(timerInterval: min(Date(), end)...end, countsDown: true, showsHours: true).monospacedDigit()
+          +                .font(.caption2).foregroundStyle(gold).frame(maxWidth: 44)
+          +        } else {
+          +            Image(systemName: Self.symbol(c.state.phase)).foregroundStyle(gold).accessibilityLabel(Text(c.state.phase))
+          +        }
+          +    }
+          +    static func symbol(_ phase: String) -> String {
+          +        switch phase {
+          +        case "playing": return "music.note"
+          +        case "reading": return "book.fill"
+          +        case "buffering": return "hourglass"
+          +        case "paused": return "pause.fill"
+          +        case "failed": return "exclamationmark.circle"
+          +        case "letter", "arrived": return "envelope.fill"
+          +        case "writing": return "pencil"
+          +        default: return "clock"
+          +        }
+          +    }
+          +    @ViewBuilder private func controls(_ c: Context) -> some View {
+          +        if !c.isStale, let action = c.state.action {
+          +            let key = c.state.key, token = c.state.token
+          +            switch action {
+          +            case .bookmark, .extendBusy:
+          +                Button(intent: LokiMomentControlIntent(action, key, token)) {
+          +                    Label(action == .bookmark ? "Remember this" : "Give me 15 more minutes", systemImage: action == .bookmark ? "bookmark" : "clock.badge.plus")
+          +                }.buttonStyle(.bordered).tint(gold)
+          +            case .readChapter, .oneMoreChapter:
+          +                Button(intent: LokiIslandAudioIntent(action.rawValue, key, token)) {
+          +                    Label(action == .readChapter ? "Read it to me" : "One more chapter", systemImage: action == .readChapter ? "play.fill" : "text.book.closed")
+          +                }.buttonStyle(.bordered).tint(gold)
+          +            }
+          +        }
+          +    }
+          +}
+          +
+          --- a/Sources/Shared/LokiChatActivityAttributes.swift
+          +++ b/Sources/Shared/LokiChatActivityAttributes.swift
+          @@ -5,6 +5,7 @@
+               struct ContentState: Codable, Hashable {
+                   var phase: String
+                   var preview: String
+          +        var lineID: String? = nil
+               }
+           
+               var requestID: String
+          --- /dev/null
+          +++ b/Sources/Shared/LokiIslandIntents.swift
+          @@ -0,0 +1,55 @@
+          +#if LOKI_ISLAND_APP || LOKI_ISLAND_WIDGET
+          +import AppIntents
+          +import Foundation
+          +
+          +enum IslandIntentError: LocalizedError {
+          +    case unavailable
+          +    var errorDescription: String? { "Open Loki to continue." }
+          +}
+          +
+          +struct LokiMomentControlIntent: LiveActivityIntent {
+          +    static var title: LocalizedStringResource = "Update Loki activity"
+          +    static var isDiscoverable: Bool { false }
+          +    static var authenticationPolicy: IntentAuthenticationPolicy { .requiresLocalDeviceAuthentication }
+          +    @Parameter(title: "Action") var action: String
+          +    @Parameter(title: "Item") var key: String
+          +    @Parameter(title: "Position") var token: String
+          +    init() {}
+          +    init(_ action: LokiIslandAction, _ key: String, _ token: String) {
+          +        self.action = action.rawValue; self.key = key; self.token = token
+          +    }
+          +    @MainActor func perform() async throws -> some IntentResult {
+          +        #if LOKI_ISLAND_APP
+          +        guard let verb = LokiIslandAction(rawValue: action), [.bookmark, .extendBusy].contains(verb) else { throw IslandIntentError.unavailable }
+          +        try await LokiIsland.shared.perform(verb, key: key, token: token)
+          +        #endif
+          +        return .result()
+          +    }
+          +}
+          +
+          +struct LokiIslandAudioIntent: AudioPlaybackIntent {
+          +    static var title: LocalizedStringResource = "Play Loki’s original voice"
+          +    static var isDiscoverable: Bool { false }
+          +    static var authenticationPolicy: IntentAuthenticationPolicy { .requiresLocalDeviceAuthentication }
+          +    @Parameter(title: "Action") var action: String
+          +    @Parameter(title: "Item") var key: String
+          +    @Parameter(title: "Recording") var token: String
+          +    @Parameter(title: "Displayed line") var preview: String
+          +    init() {}
+          +    init(_ action: String, _ key: String, _ token: String, preview: String = "") {
+          +        self.action = action; self.key = key; self.token = token; self.preview = preview
+          +    }
+          +    @MainActor func perform() async throws -> some IntentResult {
+          +        #if LOKI_ISLAND_APP
+          +        if action == "replay" {
+          +            try await AppState.islandShared.islandReplay(request: key, line: token, preview: preview)
+          +        } else {
+          +            guard let verb = LokiIslandAction(rawValue: action), [.readChapter, .oneMoreChapter].contains(verb) else { throw IslandIntentError.unavailable }
+          +            try await LokiIsland.shared.perform(verb, key: key, token: token)
+          +        }
+          +        #endif
+          +        return .result()
+          +    }
+          +}
+          +#endif
+          +
+          --- /dev/null
+          +++ b/Sources/Shared/LokiIslandState.swift
+          @@ -0,0 +1,39 @@
+          +import Foundation
+          +#if os(iOS)
+          +import ActivityKit
+          +#endif
+          +
+          +enum LokiIslandKind: String, Codable, Hashable, CaseIterable { case music, desk, busy }
+          +enum LokiIslandAction: String, Codable, Hashable { case bookmark, readChapter, oneMoreChapter, extendBusy }
+          +
+          +struct LokiMomentAttributes: Codable, Hashable {
+          +    let kind: LokiIslandKind
+          +    struct ContentState: Codable, Hashable {
+          +        let key: String
+          +        let phase: String
+          +        let title: String
+          +        let detail: String
+          +        let note: String
+          +        let action: LokiIslandAction?
+          +        let token: String
+          +        let until: Date?
+          +    }
+          +}
+          +
+          +#if os(iOS)
+          +extension LokiMomentAttributes: ActivityAttributes {}
+          +#endif
+          +
+          +enum IslandText {
+          +    static func limit(_ text: String, bytes: Int) -> String {
+          +        var end = text.startIndex, count = 0
+          +        while end < text.endIndex {
+          +            let next = text.index(after: end)
+          +            count += text[end..<next].utf8.count
+          +            if count > bytes { break }
+          +            end = next
+          +        }
+          +        return String(text[..<end])
+          +    }
+          +}
+          +
+          --- /dev/null
+          +++ b/Tests/DeskIslandFlowTests/main.swift
+          @@ -0,0 +1,12 @@
+          +var normal = DeskChapterContinuation()
+          +precondition(normal.finish(naturally: true, readySuccessor: "2.0") == nil)
+          +precondition(!normal.choose("2.0", readySuccessor: nil))
+          +precondition(!normal.choose("7.3", readySuccessor: "2.0"))
+          +precondition(normal.choose("2.0", readySuccessor: "2.0"))
+          +precondition(normal.finish(naturally: false, readySuccessor: "2.0") == nil)
+          +precondition(normal.queued == nil)
+          +precondition(normal.choose("2.0", readySuccessor: "2.0"))
+          +precondition(normal.finish(naturally: true, readySuccessor: nil) == nil)
+          +precondition(normal.choose("2.0", readySuccessor: "2.0"))
+          +precondition(normal.finish(naturally: true, readySuccessor: "2.0") == "2.0")
+          +precondition(normal.finish(naturally: true, readySuccessor: "2.0") == nil)
+          --- /dev/null
+          +++ b/Tests/DeskPushEnvelope/main.swift
+          @@ -0,0 +1,21 @@
+          +import Foundation
+          +
+          +// Read the APNs envelope the backend contract test captured. Only fixture metadata is used.
+          +let data = try Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1]))
+          +struct DeskStartEnvelope: Decodable {
+          +    struct Payload: Decodable {
+          +        let attributes: LokiMomentAttributes
+          +        let state: LokiMomentAttributes.ContentState
+          +        let type, event: String
+          +        enum CodingKeys: String, CodingKey {
+          +            case attributes, event, state = "content-state", type = "attributes-type"
+          +        }
+          +    }
+          +    let aps: Payload
+          +}
+          +let aps = try JSONDecoder().decode(DeskStartEnvelope.self, from: data).aps
+          +precondition(aps.type == String(describing: LokiMomentAttributes.self))
+          +precondition(aps.event == "start" && aps.attributes.kind == .desk)
+          +precondition(aps.state.key == "31.0" && aps.state.phase == "arrived")
+          +precondition(aps.state.detail.isEmpty && aps.state.action == nil && aps.state.until == nil)
+          +print("Desk APNs start decodes as the production widget.")
+          --- /dev/null
+          +++ b/Tests/DeskPushEnvelope/start.json
+          @@ -0,0 +1 @@
+          +{"aps":{"timestamp":1700000000,"event":"start","input-push-token":1,"attributes-type":"LokiMomentAttributes","attributes":{"kind":"desk"},"stale-date":1700003600,"relevance-score":40,"content-state":{"key":"31.0","phase":"arrived","title":"At the desk","detail":"","note":"","token":""},"alert":{"title":"Loki","body":"A new page is waiting at the desk."}}}
+          --- /dev/null
+          +++ b/Tests/IslandReplay/main.swift
+          @@ -0,0 +1,29 @@
+          +import Foundation
+          +struct RecordedVoice: Codable {}
+          +enum MessageDelivery: String, Codable { case sent }
+          +
+          +let firstRequest = UUID(), nextRequest = UUID()
+          +func item(_ text: String, _ request: UUID, _ role: String = "assistant") -> ChatItem {
+          +    var value = ChatItem(role: role, text: text)
+          +    value.replyingTo = request
+          +    return value
+          +}
+          +let a = item("Exact line.", firstRequest), b = item("Exact line.", nextRequest)
+          +let c = item("Another sentence.", firstRequest)
+          +let rows = [item("Other role.", firstRequest, "user"), a, b, c]
+          +precondition(IslandReplayTarget.local(rows, request: firstRequest, line: c.id.uuidString)?.id == c.id)
+          +precondition(IslandReplayTarget.local(rows, request: nextRequest, line: a.id.uuidString) == nil)
+          +precondition(IslandReplayTarget.local(rows, request: firstRequest, line: "")?.id == a.id)
+          +precondition(IslandReplayTarget.local(rows, request: firstRequest, line: "invalid") == nil)
+          +precondition(!IslandReplayTarget.agrees("Exact", with: a.displayText))
+          +precondition(!IslandReplayTarget.agrees("", with: ""))
+          +let grouped = item("“Wait.” Loki said.", firstRequest)
+          +precondition(IslandReplayTarget.pinned(grouped, request: firstRequest, line: "", preview: "“Wait.”")?.voiceText == "“Wait.”")
+          +precondition(IslandReplayTarget.pinned(grouped, request: firstRequest, line: "", preview: "“Go.”") == nil)
+          +precondition(IslandReplayTarget.pinned(grouped, request: firstRequest, line: grouped.id.uuidString, preview: "“Wait.”") == nil)
+          +let long = String(repeating: "🌙", count: 300)
+          +precondition(IslandReplayTarget.agrees(IslandText.limit(long, bytes: 640), with: long))
+          +precondition(IslandReplayTarget.agrees(String(long.prefix(240)), with: long))
+          +precondition(IslandText.limit("a🌙", bytes: 3) == "a")
+          +print("Island reply identity, legacy push and bounded previews passed.")
+          +
+          --- /dev/null
+          +++ b/Tests/MusicMoments/main.swift
+          @@ -0,0 +1,37 @@
+          +import Foundation
+          +
+          +let timeline = MusicLyricTimeline("""
+          +[offset:100]
+          +[00:01.2][00:03.23]Two refrains
+          +[00:05.456]A new line
+          +[00:06.5]
+          +[00:12]Final line
+          +""")
+          +precondition(timeline.lines.map(\.startMS) == [1100,3130,5356,6400,11900])
+          +precondition(timeline.token(at: 900) == "time-0")
+          +precondition(timeline.line(at: 3401)?.text == "Two refrains")
+          +precondition(timeline.token(at: 6400) == "time-0")
+          +let live = timeline.capture(token: "line-1100", now: 2011, duration: 20000)
+          +precondition(live?.0 == 2011 && live?.1 == "Two refrains")
+          +let advanced = timeline.capture(token: "line-1100", now: 5700, duration: 20000)
+          +precondition(advanced?.0 == 1100 && advanced?.1 == "Two refrains")
+          +precondition(timeline.capture(token: "line-3131", now: 5700, duration: 20000) == nil)
+          +let instrumental = MusicLyricTimeline()
+          +precondition(instrumental.token(at: 34781) == "time-30000")
+          +let noLyric = instrumental.capture(token: "time-30000", now: 34781, duration: 90000)
+          +precondition(noLyric?.0 == 34781 && noLyric?.1 == "")
+          +precondition(instrumental.capture(token: "time-30000", now: 80000, duration: 90000)?.0 == 30000)
+          +precondition(instrumental.capture(token: "time-45001", now: 80000, duration: 90000) == nil)
+          +
+          +let saved = MusicMoment(id: UUID(), epoch: UUID(), segment: "line-1100", song_id: "111",
+          +    title: "Version two", artist: "Band", position_ms: 2011, duration_ms: 20000,
+          +    lyric: "Two refrains", marked_at: 1764000000)
+          +let encoded = try JSONEncoder().encode(saved)
+          +let decoded = try JSONDecoder().decode(MusicMoment.self, from: encoded)
+          +precondition(decoded == saved && !decoded.synced && decoded.clock == "0:02")
+          +let reply: [String: Any] = ["id": UUID().uuidString, "action": "replay_moment", "expires": 1764000100,
+          +                            "moment": saved.payload.merging(["synced": true]) { _, new in new }]
+          +let data = try JSONSerialization.data(withJSONObject: reply)
+          +let action = try JSONDecoder().decode(MusicAction.self, from: data)
+          +precondition(action.moment?.song_id == "111" && action.moment?.position_ms == 2011 && action.moment?.synced == true)
+          +print("Music moment timeline and replay models passed.")
+          LAUNCH_PATCH
+          shasum -a 256 -c - <<'VERIFIED'
+          274218fdedd66c4f2d383397aa2ba5e3599de03c72746ca9dbf7338dfcb4be98  Sources/App/API.swift
+          fdb9b3752782bec8f751fe0c4797e2067c72834427823fb6fbaae5bb112ede6b  Sources/App/AppState.swift
+          7b87024cb3ef1e13c315acf64ea02cef5d321962362801c918bcc974b94df704  Sources/App/BusyIslandAgreement.swift
+          4ac36916be3518d34a9afee5cc310689b51a8084148dcc57bc4a4b63e82294aa  Sources/App/ChatLiveActivity.swift
+          a612c46d64f8a8a512d37c9a21c7e0e486502d7c40a4141e364e85caacb16b90  Sources/App/DeskChapterContinuation.swift
+          d7421f22b63ae0d47546ec8bcfc7b88c3d055624322ea9a0f1cb48b14d4d52e9  Sources/App/DeskIslandPush.swift
+          be2755e93b2f81e7c9d082d7a2101e6eca389ce157c6caf1e9b960edeb6ec299  Sources/App/DeskIslandReader.swift
+          7d917e62d5a69c1f2ac8f15240f686632d99276610f8524c75bf19f53e37991d  Sources/App/DeskView.swift
+          65da6513d3e5c7a93a11efed4448c544e1833784877dee3ccca1e528f6b636a6  Sources/App/IslandReplayTarget.swift
+          99afffe30db3dc2201d5d9bb49e44bbbfec2a14ff8e29ef08ba9af13b1dcf716  Sources/App/LokiApp.swift
+          dc9851aeb82c888f1c11ed39bdaff7c060ed9a2ae3eec8b44cf571ea8df5446d  Sources/App/LokiIsland.swift
+          b32b6c5e445aa08912c07b62f002373d597b2822c403f692db799d35d2ff1b85  Sources/App/MusicModels.swift
+          2375bc5a39ff9a4417bd66218efee0ea736ec047e01011227a95fa029d6ff1e5  Sources/App/MusicMoment.swift
+          d621a919a073acf3c6290c9315d8a4692a37dc31cab1333cb3b119de37f863a7  Sources/App/MusicService.swift
+          c2adfdf09a0294b85fc23a59458055685651894e912fe254611a23fe0d4cb03e  Sources/App/MusicView.swift
+          125ec21afc001e8f58e0df32b1046c70b553a18bf536c673cfdccbaefbd1d935  Sources/App/NetEaseClient.swift
+          60f131e0ab8673d425abc651876c46ba316449687e84da5ce2dcdb3a633a61af  Sources/App/Notifications.swift
+          ecafb865f8bef8d4187d150227088101957778e479225c91fbe984a7ccddf240  Sources/App/PCMPlayback.swift
+          4f75b4d5bf6a08f0348b81171cf4580f7e55689c0b84ace56caf524cc7111126  Sources/App/SettingsView.swift
+          8f2c14dc3d43b0579aeb179991600b01c8446b501b1aa8423491f8f060ba9316  Sources/App/VoiceService.swift
+          4d21c385058ed4528a4f7e54edf0084b87d53c9f5bef1f018b52c3e39c281db9  Sources/LiveActivity/LokiChatActivityWidget.swift
+          d4788ab5eb04f359b5ba3f3f950a000ca4e2c4de9953a8a1b0871d2b29c2dde3  Sources/LiveActivity/LokiMomentWidget.swift
+          33d9b374b01fdc3a15b8320b074f02bb8ea8640d03124077cc375b4698883b09  Sources/Shared/LokiChatActivityAttributes.swift
+          0164bec26bfb9506c1f14141d05b639246e3fd3f324fde7402af37a4ebab072f  Sources/Shared/LokiIslandIntents.swift
+          6f91437ff40fbad896d5e382d06006c71cf3416b374faee56cf7276837825662  Sources/Shared/LokiIslandState.swift
+          326d7dcc9dd02dd43254874c1eddc336358b2ffb49cd7704c82f81dc3e24b597  Tests/DeskIslandFlowTests/main.swift
+          bd5ac171a6ee370f1e32e49a6be6b04bab72e1e1e1ca967d222619d09613fffb  Tests/DeskPushEnvelope/main.swift
+          3e70b511dd06d43e3c83b7c3424fe00bdcd084838324a86f1f68f099046fbd2d  Tests/DeskPushEnvelope/start.json
+          fce8c5f13bec2e93f53d0e0dc447f3f01602812c8cfdd47e589e19567e74d101  Tests/IslandReplay/main.swift
+          d6ed6ad27355a01d40d1e7df8d53bb43da67a05d90df6c33011692152b9312b7  Tests/MusicMoments/main.swift
+          VERIFIED
+          python3 - <<'VERSION'
+          from pathlib import Path
+          p=Path('project.yml')
+          s=p.read_text()
+          assert '112303' in s and '112304' not in s and 'LOKI_ISLAND_APP' not in s and 'LOKI_ISLAND_WIDGET' not in s
+          old='    sources: [Sources/LiveActivity, Sources/Shared/LokiChatActivityAttributes.swift]'
+          new='    sources: [Sources/LiveActivity, Sources/Shared/LokiChatActivityAttributes.swift, Sources/Shared/LokiIslandState.swift, Sources/Shared/LokiIslandIntents.swift]'
+          assert s.count(old)==1
+          s=s.replace(old,new)
+          for bid,flag in [('dev.zcydrkv7yh.loki','LOKI_ISLAND_APP'),('dev.zcydrkv7yh.loki.liveactivity','LOKI_ISLAND_WIDGET')]:
+              anchor='        PRODUCT_BUNDLE_IDENTIFIER: '+bid+chr(10)
+              assert s.count(anchor)==1
+              s=s.replace(anchor,anchor+"        SWIFT_ACTIVE_COMPILATION_CONDITIONS: '$(inherited) "+flag+"'"+chr(10))
+          p.write_text(s.replace('112303','112304'))
+          VERSION
+      - name: Test Island replay and timing
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc Sources/Shared/LokiIslandState.swift Sources/App/Models.swift Sources/App/IslandReplayTarget.swift Tests/IslandReplay/main.swift -o "$RUNNER_TEMP/replay" && "$RUNNER_TEMP/replay"
+      - name: Test desk reading continuation
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc Sources/App/DeskChapterContinuation.swift Tests/DeskIslandFlowTests/main.swift -o "$RUNNER_TEMP/desk-flow" && "$RUNNER_TEMP/desk-flow"
+      - name: Test music moment identity
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc Sources/App/MusicModels.swift Sources/App/MusicMoment.swift Tests/MusicMoments/main.swift -o "$RUNNER_TEMP/music-moments" && "$RUNNER_TEMP/music-moments"
+      - name: Test remote desk envelope decoding
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc Sources/Shared/LokiIslandState.swift Tests/DeskPushEnvelope/main.swift -o "$RUNNER_TEMP/desk-push-envelope" && "$RUNNER_TEMP/desk-push-envelope" Tests/DeskPushEnvelope/start.json
+      - name: Test HealthKit authorization group and OS version policy
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc -swift-version 5 Sources/App/HealthReadAccessPolicy.swift Tests/HealthReadAccess/main.swift -o "$RUNNER_TEMP/health-access"
+          "$RUNNER_TEMP/health-access"
+      - name: Test sleep selection and overnight readings
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc -swift-version 5 Sources/App/SleepIntervals.swift Sources/App/SleepDetails.swift Tests/SleepWakeHealth/main.swift -o "$RUNNER_TEMP/test-sleep-wake"
+          "$RUNNER_TEMP/test-sleep-wake"
+      - name: Health archive payload identity and binary reconstruction
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc -swift-version 5 Sources/App/HealthArchivePayload.swift Tests/HealthArchivePayload/main.swift -o "$RUNNER_TEMP/health-archive-payload"
+          "$RUNNER_TEMP/health-archive-payload"
+      - name: Health archive scheduling and fairness
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc -swift-version 5 Sources/App/HealthArchiveSchedule.swift Tests/HealthArchiveSchedule/main.swift -o "$RUNNER_TEMP/health-archive-scheduling"
+          "$RUNNER_TEMP/health-archive-scheduling"
+      - name: Test app presence, typing and voice activity
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc -swift-version 5 -parse-as-library Sources/App/CompanionInteraction.swift Tests/CompanionInteractionRegression/main.swift -o "$RUNNER_TEMP/test-interaction"
+          "$RUNNER_TEMP/test-interaction"
+      - name: Test message timestamps and legacy conversation order
+        shell: bash
+        working-directory: app-source
+        run: |
+          swiftc Sources/App/Models.swift Sources/App/ChatHistoryTiming.swift Tests/MessageTimes/main.swift -o "$RUNNER_TEMP/loki-message-times"
+          "$RUNNER_TEMP/loki-message-times"
+      - name: Test notification routing and inbox
+        shell: bash
+        working-directory: app-source
+        run: |
+          swiftc Sources/App/ChatNotificationInbox.swift Tests/NotificationRouting/main.swift -o "$RUNNER_TEMP/loki-notification-routing"
+          "$RUNNER_TEMP/loki-notification-routing"
+      - name: Test public reasoning and tool display
+        shell: bash
+        working-directory: app-source
+        run: |
+          awk '/^struct ChatItem:/ { exit } { print }' Sources/App/Models.swift > "$RUNNER_TEMP/display-tests.swift"
+          cat >> "$RUNNER_TEMP/display-tests.swift" <<'SWIFT'
+          let prefix = "Activity · Compare the two options."
+          let tool = "Used the music search tool."
+          let stages = "Activity · Received your message.\nWriting the reply."
+          precondition(TurnProgressContent(summary: prefix, activity: tool).summary == prefix)
+          precondition(TurnProgressContent(summary: prefix, activity: tool).activity == tool)
+          precondition(TurnProgressContent(summary: stages).isEmpty)
+          precondition(TurnProgressContent(summary: "Activity · " + tool, activity: tool).summary == nil)
+          precondition(TurnProgressContent(summary: "Activity · " + tool, activity: tool).activity == tool)
+          precondition(TurnProgressContent(summary: "Compare the options.").summary == "Compare the options.")
+          precondition(TurnProgressContent(activity: tool).summary == nil)
+          precondition(TurnProgressContent(activity: tool).activity == tool)
+          print("Public progress and tool display regressions passed")
+          SWIFT
+          swift "$RUNNER_TEMP/display-tests.swift"
+      - name: Verify calibrated pointer math
+        run: |
+          cat app-source/Sources/App/PhonePointerMath.swift app-source/review/tests/pointer-math-check.swift > /tmp/pointer-check.swift
+          swift /tmp/pointer-check.swift
+      - name: Generate project
+        working-directory: app-source
+        run: |
+          command -v xcodegen || brew install xcodegen
+          swift scripts/generate-app-icon.swift
+          xcodegen generate --spec project.yml
+          mkdir -p build
+      - name: Compile real iPhone architecture
+        working-directory: app-source
+        run: |
+          xcodebuild -project Loki.xcodeproj -scheme Loki -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/Device CODE_SIGNING_ALLOWED=NO build > build/device.log 2>&1 || { tail -100 build/device.log; exit 1; }
+          python3 scripts/verify-device-build.py build/Device/Build/Products/Debug-iphoneos/Loki.app
+          ditto -c -k --sequesterRsrc --keepParent build/Device/Build/Products/Debug-iphoneos/Loki.app build/Loki-screen-control-unsigned.zip
+      - name: Verify device App Intent metadata
+        working-directory: app-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'INTENTS'
+          from pathlib import Path
+          import json,plistlib
+          app=Path('build/Device/Build/Products/Debug-iphoneos/Loki.app')
+          widget=next(p for p in (app/'PlugIns').glob('*.appex') if 'liveactivity' in plistlib.loads((p/'Info.plist').read_bytes())['CFBundleIdentifier'])
+          expected={'LokiIslandAudioIntent','LokiMomentControlIntent'}
+          found=set()
+          for bundle in (app,widget):
+              m=bundle/'Metadata.appintents'/'extract.actionsdata'
+              if m.exists():
+                  data=json.dumps(json.loads(m.read_bytes()))
+                  found.update(s for s in expected if s in data)
+                  print(bundle.name,'extracted App Intent metadata',m.stat().st_size)
+              binary=bundle/plistlib.loads((bundle/'Info.plist').read_bytes())['CFBundleExecutable']
+              body=b''.join(p.read_bytes() for p in (binary,*bundle.glob('*.debug.dylib')))
+              assert all(x.encode() in body for x in expected),bundle.name
+          assert found==expected,sorted(expected-found)
+          INTENTS
+      - name: Upload verified iPhone architecture
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: loki-island-moments-112304-device
+          path: |
+            app-source/build/device.log
+            app-source/build/Loki-screen-control-unsigned.zip
+          if-no-files-found: error
+          retention-days: 1
+      - name: Preserve compiler diagnostics if the device build fails
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: loki-island-moments-112304-diagnostics
+          path: app-source/build/device.log
+          if-no-files-found: ignore
+          retention-days: 1
+      - name: Install and launch iPhone simulator build
+        working-directory: app-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          device="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; devices=json.load(sys.stdin)["devices"]; options=[(k, d["name"], d["udid"]) for k, rows in devices.items() if "iOS-" in k for d in rows if d["name"].startswith("iPhone")]; assert options; print(max(options,key=lambda q:(tuple(map(int,q[0].split("iOS-")[-1].split("-"))),"Pro" in q[1]))[2])')"
+          xcrun simctl boot "$device" || true
+          xcrun simctl bootstatus "$device" -b
+          mkdir -p build
+          xcodebuild -project Loki.xcodeproj -scheme Loki -configuration Debug -sdk iphonesimulator -destination "id=$device" -derivedDataPath build/Simulator CODE_SIGNING_ALLOWED=NO build > build/simulator.log 2>&1 || { tail -100 build/simulator.log; exit 1; }
+          app='build/Simulator/Build/Products/Debug-iphonesimulator/Loki.app'
+          xcrun simctl install "$device" "$app"
+          bundle="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Info.plist")"
+          result="$(xcrun simctl launch "$device" "$bundle")"
+          pid="$(echo "$result" | awk '{print $NF}')"
+          sleep 3
+          ps -p "$pid" -o pid= >/dev/null
+          echo "Installed and launched $bundle successfully"
+      - name: Print simulator diagnostics
+        working-directory: app-source
+        if: failure()
+        shell: bash
+        run: |
+          if test -f build/simulator.log; then tail -100 build/simulator.log; fi
