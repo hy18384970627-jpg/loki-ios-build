@@ -1,0 +1,167 @@
+name: Build iPhone artifact for verified Loki 112302 source
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/health-launch-device-112302.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: loki-health-launch-device-112302
+  cancel-in-progress: false
+jobs:
+  app:
+    runs-on: xcode-27
+    timeout-minutes: 48
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-iphone-control
+          ref: 8be1a93226edf64a2be9678f429383bc891f3dce
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: d6b09385be43ff8b595f01c0729dad073f83fd82
+          path: verified-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: bdf05059603c369e0f2cceb56890ed1fa2f7d437
+          path: prior-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 3d5400d4edd282c8353fe9ca5f811e64fa35d2a5
+          path: notify-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 555062cda24502d988752cfb072df51bdf0498f4
+          path: time-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 3640476e16425c88d43f258027432c102838cb4a
+          path: mood-desk-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 94570727471955e14c95ba446dbef62aaeb29caa
+          path: health-wake-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: ee5fc9af98d33c71deb0661f8012cea46f2b87ae
+          path: launch-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 0872673023b590e71745ee3805dd865fd7d60140
+          path: launch-source-112302
+          persist-credentials: false
+      - name: Reconstruct exact reviewed 112302
+        shell: bash
+        run: |
+          echo 'c93cbe1360871b5dfa47c925cf3ad8e246cded48f15f9a64c4329e4ef394d0f5  launch-source-112302/.github/workflows/health-launch-112302.yml' | shasum -a 256 -c -
+          ruby <<'BASE'
+          require 'yaml'
+          steps=YAML.load_file('launch-source-112302/.github/workflows/health-launch-112302.yml').fetch('jobs').fetch('app').fetch('steps')
+          ['Reconstruct the verified 112301 client','Apply reviewed launch changes'].each do |name|
+            picked=steps.select {|s| s['name']==name}
+            abort('Missing pinned source') unless picked.size==1
+            step=picked.first
+            dir=step.fetch('working-directory','.')
+            abort('Unexpected work directory') unless ['.','app-source'].include?(dir)
+            system('/bin/bash','-e','-o','pipefail','-c',step.fetch('run'),chdir:dir) or abort(name)
+          end
+          BASE
+      - name: Test sleep selection and overnight readings
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc -swift-version 5 Sources/App/SleepIntervals.swift Sources/App/SleepDetails.swift Tests/SleepWakeHealth/main.swift -o "$RUNNER_TEMP/test-sleep-wake"
+          "$RUNNER_TEMP/test-sleep-wake"
+      - name: Health archive payload identity and binary reconstruction
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc -swift-version 5 Sources/App/HealthArchivePayload.swift Tests/HealthArchivePayload/main.swift -o "$RUNNER_TEMP/health-archive-payload"
+          "$RUNNER_TEMP/health-archive-payload"
+      - name: Health archive scheduling and fairness
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc -swift-version 5 Sources/App/HealthArchiveSchedule.swift Tests/HealthArchiveSchedule/main.swift -o "$RUNNER_TEMP/health-archive-scheduling"
+          "$RUNNER_TEMP/health-archive-scheduling"
+      - name: Test app presence, typing and voice activity
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc -swift-version 5 -parse-as-library Sources/App/CompanionInteraction.swift Tests/CompanionInteractionRegression/main.swift -o "$RUNNER_TEMP/test-interaction"
+          "$RUNNER_TEMP/test-interaction"
+      - name: Test message timestamps and legacy conversation order
+        shell: bash
+        working-directory: app-source
+        run: |
+          swiftc Sources/App/Models.swift Sources/App/ChatHistoryTiming.swift Tests/MessageTimes/main.swift -o "$RUNNER_TEMP/loki-message-times"
+          "$RUNNER_TEMP/loki-message-times"
+      - name: Test notification routing and inbox
+        shell: bash
+        working-directory: app-source
+        run: |
+          swiftc Sources/App/ChatNotificationInbox.swift Tests/NotificationRouting/main.swift -o "$RUNNER_TEMP/loki-notification-routing"
+          "$RUNNER_TEMP/loki-notification-routing"
+      - name: Test public reasoning and tool display
+        shell: bash
+        working-directory: app-source
+        run: |
+          awk '/^struct ChatItem:/ { exit } { print }' Sources/App/Models.swift > "$RUNNER_TEMP/display-tests.swift"
+          cat >> "$RUNNER_TEMP/display-tests.swift" <<'SWIFT'
+          let prefix = "Activity · Compare the two options."
+          let tool = "Used the music search tool."
+          let stages = "Activity · Received your message.\nWriting the reply."
+          precondition(TurnProgressContent(summary: prefix, activity: tool).summary == prefix)
+          precondition(TurnProgressContent(summary: prefix, activity: tool).activity == tool)
+          precondition(TurnProgressContent(summary: stages).isEmpty)
+          precondition(TurnProgressContent(summary: "Activity · " + tool, activity: tool).summary == nil)
+          precondition(TurnProgressContent(summary: "Activity · " + tool, activity: tool).activity == tool)
+          precondition(TurnProgressContent(summary: "Compare the options.").summary == "Compare the options.")
+          precondition(TurnProgressContent(activity: tool).summary == nil)
+          precondition(TurnProgressContent(activity: tool).activity == tool)
+          print("Public progress and tool display regressions passed")
+          SWIFT
+          swift "$RUNNER_TEMP/display-tests.swift"
+      - name: Verify calibrated pointer math
+        run: |
+          cat app-source/Sources/App/PhonePointerMath.swift app-source/review/tests/pointer-math-check.swift > /tmp/pointer-check.swift
+          swift /tmp/pointer-check.swift
+      - name: Generate project
+        working-directory: app-source
+        run: |
+          command -v xcodegen || brew install xcodegen
+          swift scripts/generate-app-icon.swift
+          xcodegen generate --spec project.yml
+          mkdir -p build
+      - name: Compile real iPhone architecture
+        working-directory: app-source
+        run: |
+          xcodebuild -project Loki.xcodeproj -scheme Loki -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/Device CODE_SIGNING_ALLOWED=NO build > build/device.log 2>&1 || { tail -100 build/device.log; exit 1; }
+          python3 scripts/verify-device-build.py build/Device/Build/Products/Debug-iphoneos/Loki.app
+          ditto -c -k --sequesterRsrc --keepParent build/Device/Build/Products/Debug-iphoneos/Loki.app build/Loki-screen-control-unsigned.zip
+      - name: Upload verified iPhone architecture
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: loki-health-launch-112302-device
+          path: |
+            app-source/build/device.log
+            app-source/build/Loki-screen-control-unsigned.zip
+          if-no-files-found: error
+          retention-days: 1
