@@ -1,0 +1,1005 @@
+name: Build Loki original voice replay for iPhone 112305
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/voice-replay-112305.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: loki-voice-replay-112305
+  cancel-in-progress: false
+jobs:
+  app:
+    runs-on: xcode-27
+    timeout-minutes: 48
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-iphone-control
+          ref: 8be1a93226edf64a2be9678f429383bc891f3dce
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: d6b09385be43ff8b595f01c0729dad073f83fd82
+          path: verified-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: bdf05059603c369e0f2cceb56890ed1fa2f7d437
+          path: prior-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 3d5400d4edd282c8353fe9ca5f811e64fa35d2a5
+          path: notify-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 555062cda24502d988752cfb072df51bdf0498f4
+          path: time-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 3640476e16425c88d43f258027432c102838cb4a
+          path: mood-desk-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 94570727471955e14c95ba446dbef62aaeb29caa
+          path: health-wake-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: ee5fc9af98d33c71deb0661f8012cea46f2b87ae
+          path: launch-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 0872673023b590e71745ee3805dd865fd7d60140
+          path: consent-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 5c9a09a7a22e9cce113f09f8a9e01dc22ab7a08f
+          path: island-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 6d9820da3c1a2e39545b95fbe449ee4159d7c210
+          path: voice-base-recipe
+          persist-credentials: false
+      - name: Reconstruct the verified 112304 client
+        shell: bash
+        run: |
+          echo '6f2d9e3a77a74290bf7dd245f067525a77e7bf299c451f5570b0bae15fed122c  voice-base-recipe/.github/workflows/island-moments-112304.yml' | shasum -a 256 -c -
+          ruby <<'PREVIOUS'
+          require 'yaml'
+          require 'json'
+          steps = YAML.load_file('voice-base-recipe/.github/workflows/island-moments-112304.yml').fetch('jobs').fetch('app').fetch('steps')
+          JSON.parse('["Reconstruct the verified 112303 client", "Apply reviewed island changes"]').each do |name|
+            matches = steps.select { |s| s['name'] == name }
+            abort('Missing baseline step') unless matches.size == 1
+            step=matches.first
+            dir=step.fetch('working-directory','.')
+            abort('Unexpected baseline directory') unless ['.','app-source'].include?(dir)
+            system('/bin/bash','-e','-o','pipefail','-c',step.fetch('run'),chdir:dir) or abort(name)
+          end
+          PREVIOUS
+      - name: Apply reviewed voice replay changes
+        working-directory: app-source
+        shell: bash
+        run: |
+          python3 - <<'BASE_CHECK'
+          from pathlib import Path
+          import hashlib, json
+          known = json.loads('{"Sources/App/PCMDownload.swift": "bff64fe0bbd1fc7042e9f6ec4a3418ff1cbe425bf683abaa882b4e05b2acdcd7", "Sources/App/AppState.swift": "fdb9b3752782bec8f751fe0c4797e2067c72834427823fb6fbaae5bb112ede6b", "Sources/App/VoiceService.swift": "8f2c14dc3d43b0579aeb179991600b01c8446b501b1aa8423491f8f060ba9316", "Sources/App/ChatView.swift": "d583b3e364d9f71ff7d60556f94c1dcc885bf4d45f74b9b60b17fb5f91fc7315", "Sources/App/SentencePlaybackQueue.swift": "a0a403fb4a2df882cdef080bcb221885cede8011f0591a5f85a88120c637a445"}')
+          for name, expected in known.items():
+              p=Path(name)
+              data=p.read_bytes()
+              clean=data.decode('utf-8-sig').replace(chr(13)+chr(10),chr(10)).encode()
+              assert hashlib.sha256(clean).hexdigest()==expected, name
+              if clean!=data: p.write_bytes(clean)
+          BASE_CHECK
+          shasum -a 256 -c - <<'BASELINE'
+          bff64fe0bbd1fc7042e9f6ec4a3418ff1cbe425bf683abaa882b4e05b2acdcd7  Sources/App/PCMDownload.swift
+          fdb9b3752782bec8f751fe0c4797e2067c72834427823fb6fbaae5bb112ede6b  Sources/App/AppState.swift
+          8f2c14dc3d43b0579aeb179991600b01c8446b501b1aa8423491f8f060ba9316  Sources/App/VoiceService.swift
+          d583b3e364d9f71ff7d60556f94c1dcc885bf4d45f74b9b60b17fb5f91fc7315  Sources/App/ChatView.swift
+          a0a403fb4a2df882cdef080bcb221885cede8011f0591a5f85a88120c637a445  Sources/App/SentencePlaybackQueue.swift
+          BASELINE
+          mkdir -p Sources/App Tests/ManualVoiceReplay Tests/SpeechStreamResponse
+          patch --batch -p1 <<'LAUNCH_PATCH'
+          --- /dev/null
+          +++ b/Sources/App/SpeechStreamResponseError.swift
+          @@ -0,0 +1,53 @@
+          +import Foundation
+          +
+          +/// Only HTTP metadata is used here. Untrusted server text never enters the alert or diagnostics.
+          +enum SpeechStreamResponseError: LocalizedError, CustomNSError, Equatable {
+          +    case missingHTTPResponse
+          +    case httpStatus(Int)
+          +    case unexpectedFormat
+          +    case unexpectedSampleRate
+          +
+          +    static func check(status: Int?, mimeType: String?, sampleRate: String?) -> Self? {
+          +        guard let status else { return .missingHTTPResponse }
+          +        guard status == 200 else { return .httpStatus(status) }
+          +        guard mimeType?.lowercased() == "audio/pcm" else { return .unexpectedFormat }
+          +        guard sampleRate == "24000" else { return .unexpectedSampleRate }
+          +        return nil
+          +    }
+          +
+          +    static var errorDomain: String { "LokiSpeechStream" }
+          +    var errorCode: Int {
+          +        switch self {
+          +        case .missingHTTPResponse: return -1
+          +        case .httpStatus(let status): return status
+          +        case .unexpectedFormat: return -2
+          +        case .unexpectedSampleRate: return -3
+          +        }
+          +    }
+          +    var errorUserInfo: [String: Any] {
+          +        [NSLocalizedDescriptionKey: errorDescription ?? "语音播放失败。"]
+          +    }
+          +    var errorDescription: String? {
+          +        switch self {
+          +        case .missingHTTPResponse:
+          +            return "没有收到语音服务的有效响应，请稍后双击重播。"
+          +        case .unexpectedFormat:
+          +            return "语音服务返回了无法播放的音频格式，请稍后双击重播。"
+          +        case .unexpectedSampleRate:
+          +            return "原声音频的采样率异常，请稍后双击重播。"
+          +        case .httpStatus(let status):
+          +            let reason: String
+          +            switch status {
+          +            case 401: reason = "语音请求未通过身份验证，请检查 Loki 的配对状态。"
+          +            case 403: reason = "当前入口拒绝了语音请求。"
+          +            case 404: reason = "当前入口找不到原声服务。"
+          +            case 400, 413, 422: reason = "原声服务无法处理这条消息的播放请求。"
+          +            case 409: reason = "原声服务正处理另一条语音，请稍后双击重播。"
+          +            case 429: reason = "语音请求太频繁，请稍后双击重播。"
+          +            case 502, 503, 504: reason = "原声服务暂时未能提供音频，请稍后双击重播。"
+          +            default: reason = "语音请求未取得可播放的音频，请稍后双击重播。"
+          +            }
+          +            return "\(reason)（HTTP \(status)）"
+          +        }
+          +    }
+          +}
+          --- a/Sources/App/PCMDownload.swift
+          +++ b/Sources/App/PCMDownload.swift
+          @@ -50,9 +50,10 @@
+               }
+               func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
+                               completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+          -        guard let response = response as? HTTPURLResponse, response.statusCode == 200,
+          -              response.mimeType == "audio/pcm", response.value(forHTTPHeaderField: "X-Audio-Sample-Rate") == "24000" else {
+          -            finish(LokiError.message("流式原声暂不可用，未自动重试或切换声线。"))
+          +        let http = response as? HTTPURLResponse
+          +        if let error = SpeechStreamResponseError.check(status: http?.statusCode, mimeType: http?.mimeType,
+          +                                                      sampleRate: http?.value(forHTTPHeaderField: "X-Audio-Sample-Rate")) {
+          +            finish(error)
+                       completionHandler(.cancel); return
+                   }
+                   completionHandler(.allow)
+          --- /dev/null
+          +++ b/Sources/App/ManualVoiceReplay.swift
+          @@ -0,0 +1,58 @@
+          +import Foundation
+          +
+          +/// One outstanding playback per tapped bubble. The active sound may finish while a
+          +/// replay of that same bubble is already queued, so only finish the active phase.
+          +struct ManualVoiceReplay {
+          +    enum Phase: Equatable { case queued, waiting, playing }
+          +    enum Action: String { case joinedStream, promoted, inserted, alreadyPending }
+          +    struct Ticket {
+          +        let attempt: UUID
+          +        var phase: Phase
+          +    }
+          +    private var tickets: [UUID: Ticket] = [:]
+          +
+          +    subscript(_ message: UUID) -> Ticket? { tickets[message] }
+          +    var hasPending: Bool { !tickets.isEmpty }
+          +    func phase(for id: UUID, audible: UUID?) -> Phase? {
+          +        guard let phase = tickets[id]?.phase else { return nil }
+          +        return phase == .playing && audible != id ? .waiting : phase
+          +    }
+          +
+          +    mutating func request(_ id: UUID, attempt: UUID, active: UUID?, audible: UUID?, queued: Bool) -> Action {
+          +        if let ticket = tickets[id], ticket.phase != .playing { return .alreadyPending }
+          +        if active == id && audible != id {
+          +            tickets[id] = Ticket(attempt: attempt, phase: .waiting)
+          +            return .joinedStream
+          +        }
+          +        tickets[id] = Ticket(attempt: attempt, phase: .queued)
+          +        return queued ? .promoted : .inserted
+          +    }
+          +
+          +    mutating func beganWaiting(_ id: UUID) -> UUID? {
+          +        guard tickets[id]?.phase == .queued else { return nil }
+          +        tickets[id]?.phase = .waiting
+          +        return tickets[id]?.attempt
+          +    }
+          +
+          +    mutating func beganOutput(_ id: UUID) -> UUID? {
+          +        guard tickets[id]?.phase == .waiting else { return nil }
+          +        tickets[id]?.phase = .playing
+          +        return tickets[id]?.attempt
+          +    }
+          +
+          +    mutating func finish(_ id: UUID) -> UUID? {
+          +        guard let ticket = tickets[id], ticket.phase != .queued else { return nil }
+          +        tickets.removeValue(forKey: id)
+          +        return ticket.attempt
+          +    }
+          +
+          +    mutating func cancelAll() { tickets.removeAll() }
+          +}
+          +
+          +/// Skip a reply's unusable cached audio until a fresh stream replaces it.
+          +struct VoiceCacheRecovery {
+          +    private var failed: Set<UUID> = []
+          +    func mayRead(_ id: UUID) -> Bool { !failed.contains(id) }
+          +    mutating func failedToPlay(_ id: UUID) { failed.insert(id) }
+          +    mutating func savedReplacement(_ id: UUID) { failed.remove(id) }
+          +}
+          --- a/Sources/App/AppState.swift
+          +++ b/Sources/App/AppState.swift
+          @@ -5,7 +5,7 @@
+           @MainActor final class AppState: ObservableObject {
+               static let islandShared = AppState()
+               @Published var showIslandMusic = false
+          -    private var replayPending: Set<UUID> = []
+          +    @Published private(set) var manualReplay = ManualVoiceReplay()
+               @Published var messages: [ChatItem] = []
+               @Published var tasks: [TaskCard] = PrivateFiles.load("tasks.json", fallback: [])
+               @Published var commands: [MobileCommand] = []
+          @@ -657,15 +657,65 @@
+                           }
+                           guard let packet = self.spokenQueue.take() else { break }
+                           let next = self.spokenQueue.first?.item
+          +                let id = packet.item.id
+          +                let requestedBeforePlayback = self.manualReplay[id] != nil
+          +                if let attempt = self.manualReplay.beganWaiting(id) {
+          +                    self.replayEvent("audio_replay_waiting", attempt: attempt)
+          +                }
+                           let played = await packet.voice.speakAndWait(packet.item.voiceText, api: self.api,
+          -                    messageID: packet.item.id, next: next)
+          +                    messageID: id, next: next) { source in
+          +                        if let attempt = self.manualReplay.beganOutput(id) {
+          +                            self.replayEvent("audio_replay_started", attempt: attempt, detail: source)
+          +                        }
+          +                    }
+          +                let requestedDuringPlayback = self.manualReplay[id] != nil
+          +                if let attempt = self.manualReplay.finish(id) {
+          +                    self.replayEvent(played ? "audio_replay_finished" : "audio_replay_interrupted", attempt: attempt)
+          +                }
+                           packet.finished()
+          -                if !played {
+          -                    for removed in self.spokenQueue.remove(where: { $0.batch == packet.batch }) { removed.finished() }
+          -                }
+          -                if self.spokenQueue.isEmpty { packet.voice.releaseAudioSessionIfIdle() }
+          -            }
+          -        }
+          +                if !played && !requestedBeforePlayback && !requestedDuringPlayback {
+          +                    let requests = self.manualReplay
+          +                    for removed in self.spokenQueue.remove(where: {
+          +                        $0.batch == packet.batch && requests[$0.item.id] == nil
+          +                    }) { removed.finished() }
+          +                }
+          +                if self.spokenQueue.isEmpty { packet.voice.finishedSpeechQueue() }
+          +            }
+          +        }
+          +    }
+          +    private func replayEvent(_ stage: String, attempt: UUID, detail: String = "") {
+          +        let destination = api
+          +        // Work off the playback critical path. The attempt identifier is random and
+          +        // ephemeral; the event includes neither the chat ID nor the words being spoken.
+          +        Task {
+          +            try? await destination.event(kind: "delivery", body: ["stage": stage,
+          +                "replay_attempt": attempt.uuidString, "detail": detail])
+          +        }
+          +    }
+          +    func requestVoiceReplay(_ item: ChatItem, voice: VoiceService) {
+          +        guard paired else {
+          +            notice = "请先连接 Loki，再重播原声。"
+          +            return
+          +        }
+          +        guard !callActive, !voice.recording else {
+          +            notice = "结束通话或录音后可重播这句话。"
+          +            return
+          +        }
+          +        let attempt = UUID()
+          +        let action = manualReplay.request(item.id, attempt: attempt, active: voice.playingMessageID,
+          +            audible: voice.audibleReplyID, queued: spokenQueue.contains { $0.item.id == item.id })
+          +        replayEvent("audio_replay_accepted", attempt: attempt, detail: action.rawValue)
+          +        switch action {
+          +        case .joinedStream: replayEvent("audio_replay_waiting", attempt: attempt, detail: "joined_current")
+          +        case .promoted: spokenQueue.promoteFirst { $0.item.id == item.id }
+          +        case .inserted: enqueueSpeech([item], voice: voice, interject: true, immediateNext: true) {}
+          +        case .alreadyPending: break
+          +        }
+          +    }
+          +    func stopChatAudio(_ voice: VoiceService) {
+          +        manualReplay.cancelAll()
+          +        for packet in spokenQueue.remove(where: { _ in true }) { packet.finished() }
+          +        voice.stopPlayback()
+               }
+               func islandReplay(request: String, line: String, preview: String) async throws {
+                   let voice = VoiceService.islandShared
+          @@ -685,15 +735,12 @@
+                         paired, UIApplication.shared.isProtectedDataAvailable, !callActive, !voice.recording, voice.deskReadingKey == nil else {
+                       throw IslandIntentError.unavailable
+                   }
+          -        guard replayPending.insert(item.id).inserted else { return }
+                   let waitingOnOtherAudio = spokenTask != nil || voice.playing || voice.playingMessageID != nil
+          -        enqueueSpeech([item], voice: voice, interject: true, immediateNext: true) { [weak self] in
+          -            self?.replayPending.remove(item.id)
+          -        }
+          +        requestVoiceReplay(item, voice: voice)
+                   // Keep an idle app invoked from the lock screen alive while it starts its player.
+                   if !waitingOnOtherAudio {
+                       let limit = ContinuousClock.now.advanced(by: .seconds(15))
+          -            while replayPending.contains(item.id), voice.audibleReplyID != item.id, ContinuousClock.now < limit {
+          +            while manualReplay[item.id] != nil, voice.audibleReplyID != item.id, ContinuousClock.now < limit {
+                           try await Task.sleep(for: .milliseconds(80))
+                       }
+                   }
+          --- a/Sources/App/VoiceService.swift
+          +++ b/Sources/App/VoiceService.swift
+          @@ -5,7 +5,7 @@
+           
+           @MainActor final class VoiceService: NSObject, ObservableObject, AVAudioPlayerDelegate {
+               static let islandShared = VoiceService()
+          -    private(set) var audibleReplyID: UUID? {
+          +    @Published private(set) var audibleReplyID: UUID? {
+                   didSet {
+                       guard oldValue != audibleReplyID else { return }
+                       Task { @MainActor [weak self] in
+          @@ -20,7 +20,9 @@
+               @Published private(set) var finishedReplyID: UUID?
+               @Published private(set) var deskReadingKey: String?
+               private var deskCompletion: ((Bool) -> Void)?
+          +    private var cacheRecovery = VoiceCacheRecovery()
+               private var currentReplyID: UUID?
+          +    private var currentOutput: ((String) -> Void)?
+               @Published var draftRecording: RecordedVoice?
+               @Published var recordingSeconds: Double = 0
+               @Published var errorMessage: String?
+          @@ -73,7 +75,10 @@
+                               guard self.streamID == id else { return }
+                               try self.pcm.resumeAfterInterruption()
+                               if let player = self.player, !player.play() { throw LokiError.message("语音未能恢复播放，请双击消息重播。") }
+          -                    if self.player?.isPlaying == true { self.audibleReplyID = self.currentReplyID }
+          +                    if self.player?.isPlaying == true {
+          +                        self.audibleReplyID = self.currentReplyID
+          +                        self.currentOutput?("cache")
+          +                    }
+                               self.streamStatus = "Loki 正在说话"
+                           } catch {
+                               guard self.streamID == id else { return }
+          @@ -109,14 +114,23 @@
+               func releaseAudioSessionIfIdle() {
+                   if !playing && !recording { audioSession.release() }
+               }
+          -    func play(_ audio: Data) async throws {
+          +    func finishedSpeechQueue() {
+          +        lookahead?.stream.cancel()
+          +        lookahead = nil
+          +        releaseAudioSessionIfIdle()
+          +    }
+          +    func play(_ audio: Data, onDecodeFailure: (() -> Void)? = nil) async throws {
+                   stopRecording()
+                   try await audioSession.playback()
+                   try Task.checkCancellation()
+          -        player = try AVAudioPlayer(data: audio)
+          +        do { player = try AVAudioPlayer(data: audio) }
+          +        catch { onDecodeFailure?(); throw error }
+                   player?.delegate = self
+                   player?.volume = 1
+          -        guard player?.prepareToPlay() == true else { throw LokiError.message("无法准备这段录音，请重新播放。") }
+          +        guard player?.prepareToPlay() == true else {
+          +            onDecodeFailure?()
+          +            throw LokiError.message("无法准备这段录音，请重新播放。")
+          +        }
+                   guard player?.play() == true else { throw LokiError.message("音频未能开始播放。") }
+                   playing = true
+                   audibleReplyID = currentReplyID
+          @@ -135,6 +149,7 @@
+                   deskCompletion = nil
+                   interruptedDesk?(false)
+                   currentReplyID = nil
+          +        currentOutput = nil
+                   audibleReplyID = nil
+                   synthesizer.stopSpeaking(at: .immediate)
+                   if releaseSession && !recording { audioSession.release() }
+          @@ -176,11 +191,12 @@
+                   let completion = playbackCompletion; playbackCompletion = nil
+                   completion?.resume(returning: finished)
+               }
+          -    func speakAndWait(_ text: String, api: MobileAPI, messageID: UUID, next: ChatItem? = nil) async -> Bool {
+          +    func speakAndWait(_ text: String, api: MobileAPI, messageID: UUID, next: ChatItem? = nil,
+          +                      onOutput: @escaping (String) -> Void) async -> Bool {
+                   guard !Task.isCancelled else { return false }
+                   return await withTaskCancellationHandler {
+                       await withCheckedContinuation { continuation in
+          -                speak(text, api: api, messageID: messageID, next: next)
+          +                speak(text, api: api, messageID: messageID, next: next, onOutput: onOutput)
+                           playbackCompletion = continuation
+                       }
+                   } onCancel: {
+          @@ -188,7 +204,8 @@
+                   }
+               }
+               private func prefetch(_ next: ChatItem?, api: MobileAPI) {
+          -        guard let next, lookahead == nil, OriginalVoiceCache.read(next.id, text: next.voiceText) == nil else { return }
+          +        guard let next, lookahead == nil else { return }
+          +        if cacheRecovery.mayRead(next.id), OriginalVoiceCache.read(next.id, text: next.voiceText) != nil { return }
+                   let stream = VoiceLookahead()
+                   stream.start(cache: { samples in
+                       try OriginalVoiceCache.save(samples, messageID: next.id, text: next.voiceText)
+          @@ -198,14 +215,17 @@
+                   }
+                   lookahead = (next.id, stream)
+               }
+          -    func speak(_ text: String, api: MobileAPI, messageID: UUID? = nil, next: ChatItem? = nil) {
+          +    private func speak(_ text: String, api: MobileAPI, messageID: UUID, next: ChatItem?, onOutput: @escaping (String) -> Void) {
+                   let prepared = lookahead?.id == messageID ? lookahead?.stream : nil
+          -        if prepared != nil { lookahead = nil }
+          +        let retainedNext = prepared == nil ? lookahead : nil
+          +        lookahead = nil
+                   stopRecording(); stopPlayback(releaseSession: false)
+          +        lookahead = retainedNext
+                   consumingLookahead = prepared
+                   let id = UUID(); streamID = id
+                   playingMessageID = messageID
+                   currentReplyID = messageID
+          +        currentOutput = onOutput
+                   finishedReplyID = nil
+                   streamTask = Task { @MainActor [weak self] in
+                       guard let self else { return }
+          @@ -216,9 +236,12 @@
+                       var playbackStage = "audio_session"
+                       do {
+                           try Task.checkCancellation()
+          -                if let messageID, let audio = OriginalVoiceCache.read(messageID, text: text) {
+          +                if self.cacheRecovery.mayRead(messageID), let audio = OriginalVoiceCache.read(messageID, text: text) {
+                               self.prefetch(next, api: api)
+          -                    try await self.play(audio); self.playingMessageID = messageID
+          +                    try await self.play(audio, onDecodeFailure: { self.cacheRecovery.failedToPlay(messageID) })
+          +                    guard self.streamID == id else { return }
+          +                    self.playingMessageID = messageID
+          +                    onOutput("cache")
+                               let output = self.outputDiagnostics()
+                               Task { try? await api.event(kind: "delivery", body: output.merging([
+                                   "stage": "audio_cache_player_started"
+          @@ -241,6 +264,7 @@
+                               self.pcm.didBeginOutput = { [weak self] in
+                                   guard let self, self.streamID == id else { return }
+                                   self.audibleReplyID = messageID
+          +                        onOutput("pcm")
+                                   self.streamStatus = "Loki 正在说话"
+                               }
+                               self.pcm.firstScheduled = { [weak self] in
+          @@ -278,14 +302,17 @@
+                               "first_schedule_ms": firstScheduleMS ?? -1, "player_duration_ms": totalMS,
+                               "underruns": underruns, "scope": "player_only_not_human_heard"]) { _, new in new }) }
+                           self.audibleReplyID = nil; self.pcm.stop(); self.playing = false; self.playingMessageID = nil; self.streamTask = nil
+          -                if let messageID { try? OriginalVoiceCache.save(completePCM, messageID: messageID, text: text) }
+          +                do {
+          +                    try OriginalVoiceCache.save(completePCM, messageID: messageID, text: text)
+          +                    self.cacheRecovery.savedReplacement(messageID)
+          +                } catch { /* The stream played even if iOS could not write the cache. */ }
+                           self.finishedReplyID = self.currentReplyID
+                           self.currentReplyID = nil
+          +                self.currentOutput = nil
+                           self.finishPlaybackWaiter(true)
+                           self.scheduleIdleRelease()
+                       } catch {
+                           guard self.streamID == id else { return }
+          -                self.lookahead?.stream.cancel(); self.lookahead = nil
+                           self.consumingLookahead?.cancel(); self.consumingLookahead = nil
+                           self.audibleReplyID = nil; self.pcm.stop(); self.playing = false; self.playingMessageID = nil; self.streamTask = nil
+                           if !(error is CancellationError) {
+          @@ -295,6 +322,8 @@
+                               Task { try? await api.event(kind: "delivery", body: ["stage": "audio_player_failed",
+                                   "player_stage": stage, "error_domain": failure.domain, "error_code": failure.code]) }
+                           }
+          +                self.currentReplyID = nil
+          +                self.currentOutput = nil
+                           self.audioSession.release()
+                           self.finishPlaybackWaiter(false)
+                       }
+          @@ -394,19 +423,30 @@
+                   }
+               }
+               nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+          -        Task { @MainActor [weak self] in
+          -            guard let self, self.player === player else { return }
+          -            if self.deskReadingKey != nil {
+          -                self.player = nil
+          -                self.finishPlaybackWaiter(flag)
+          -                return
+          -            }
+          -            let next = self.lookahead; self.lookahead = nil
+          -            if flag, let id = self.currentReplyID { self.finishedReplyID = id }
+          -            self.finishPlaybackWaiter(flag)
+          -            self.stopPlayback(releaseSession: !flag)
+          -            if flag { self.lookahead = next } else { next?.stream.cancel() }
+          -            if flag { self.scheduleIdleRelease() }
+          -        }
+          +        Task { @MainActor [weak self] in self?.endedFilePlayback(player, successfully: flag) }
+          +    }
+          +    nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+          +        Task { @MainActor [weak self] in self?.endedFilePlayback(player, successfully: false) }
+          +    }
+          +    private func endedFilePlayback(_ endedPlayer: AVAudioPlayer, successfully: Bool) {
+          +        guard player === endedPlayer else { return }
+          +        if !successfully {
+          +            if let id = currentReplyID {
+          +                cacheRecovery.failedToPlay(id)
+          +                errorMessage = "这段原声未能完整播放，双击消息可重新获取。"
+          +            } else { errorMessage = "这段录音未能完整播放，请再试一次。" }
+          +        }
+          +        if deskReadingKey != nil {
+          +            player = nil
+          +            finishPlaybackWaiter(successfully)
+          +            return
+          +        }
+          +        let next = lookahead
+          +        lookahead = nil
+          +        if successfully, let id = currentReplyID { finishedReplyID = id }
+          +        finishPlaybackWaiter(successfully)
+          +        stopPlayback(releaseSession: !successfully)
+          +        lookahead = next
+          +        if successfully { scheduleIdleRelease() }
+               }
+           }
+          --- a/Sources/App/ChatView.swift
+          +++ b/Sources/App/ChatView.swift
+          @@ -71,17 +71,19 @@
+                                               || message.date.timeIntervalSince(previous?.date ?? message.date) > 300
+                                           if newDay && message.timeSource != .unknown { ChatDayDivider(date: message.date) }
+                                           ChatBubble(message: message, beginsGroup: newGroup,
+          -                                           canReplay: message.recordedVoice != nil || paired,
+          -                                           isPlaying: voice.playing && voice.playingMessageID == message.id,
+          +                                           isPlaying: message.recordedVoice == nil ? voice.audibleReplyID == message.id
+          +                                               : voice.playing && voice.playingMessageID == message.id,
+          +                                           replayPhase: app.manualReplay.phase(for: message.id, audible: voice.audibleReplyID),
+                                                      canRetry: !app.callActive,
+                                                      preview: previewMessages != nil,
+                                                      playbackFraction: { voice.recordedPlaybackFraction(for: message.id) },
+                                                      retry: {
+                                               Task { await app.retry(message.id, health: health, voice: voice, autoVoice: autoVoice, alarms: alarms, focus: focus) }
+                                           }) {
+          -                                    if voice.playing && voice.playingMessageID == message.id { voice.stopPlayback() }
+          -                                    else if let clip = message.recordedVoice { voice.playRecording(clip, messageID: message.id) }
+          -                                    else { voice.speak(message.voiceText, api: app.api, messageID: message.id) }
+          +                                    if let clip = message.recordedVoice {
+          +                                        if voice.playing && voice.playingMessageID == message.id { voice.stopPlayback() }
+          +                                        else { voice.playRecording(clip, messageID: message.id) }
+          +                                    } else { app.requestVoiceReplay(message, voice: voice) }
+                                           }.padding(.top, newGroup && !newDay ? 6 : 0).id(message.id)
+                                           if message.role == "user",
+                                              app.activeGeneratingRequestID == message.id || message.thinkingSummary != nil || message.activityLog != nil {
+          @@ -306,8 +308,8 @@
+                               }
+                           }
+                           ToolbarItem(placement: .topBarLeading) {
+          -                    if voice.playing {
+          -                        Button { voice.stopPlayback() } label: { Image(systemName: "stop.circle") }
+          +                    if voice.playing || app.manualReplay.hasPending {
+          +                        Button { app.stopChatAudio(voice) } label: { Image(systemName: "stop.circle") }
+                                       .accessibilityLabel("停止播放").accessibilityHint(voice.streamStatus)
+                               }
+                           }
+          @@ -407,8 +409,8 @@
+               @State private var showingDeliveryError = false
+               let message: ChatItem
+               let beginsGroup: Bool
+          -    let canReplay: Bool
+               let isPlaying: Bool
+          +    let replayPhase: ManualVoiceReplay.Phase?
+               let canRetry: Bool
+               let preview: Bool
+               let playbackFraction: () -> Double?
+          @@ -491,11 +493,19 @@
+                               }
+                           }
+                           .modifier(MessageBubbleGestures(replaysReply: !outgoing && message.recordedVoice == nil,
+          -                                             canReplay: canReplay, isPlaying: isPlaying,
+                                                        text: !outgoing && message.recordedVoice == nil ? message.displayText : "",
+                                                        replay: replay))
+                           .accessibilityLabel(outgoing ? "发出的消息" : "Loki 的消息")
+                           .accessibilityValue(message.recordedVoice.map { "语音 \(Int(ceil($0.duration))) 秒" } ?? message.displayText)
+          +                if let replayPhase {
+          +                    Group {
+          +                        switch replayPhase {
+          +                        case .queued: Label("已排队重播", systemImage: "clock")
+          +                        case .waiting: Label("正在准备原声…", systemImage: "hourglass")
+          +                        case .playing: Label("正在播放原声", systemImage: "speaker.wave.2")
+          +                        }
+          +                    }.font(.caption2).foregroundStyle(LokiDesign.gold)
+          +                }
+                           if let note = message.localActionNote {
+                               Text(note).font(.caption).padding(8)
+                                   .lokiPanel(fill: LokiDesign.raised, radius: 10)
+          @@ -514,15 +524,13 @@
+               @State private var translating = false
+               @State private var translationFailed = false
+               let replaysReply: Bool
+          -    let canReplay: Bool
+          -    let isPlaying: Bool
+               let text: String
+               let replay: () -> Void
+           
+               @ViewBuilder func body(content: Content) -> some View {
+          -        if replaysReply && canReplay {
+          +        if replaysReply {
+                       translatable(content.contentShape(Rectangle()).onTapGesture(count: 2, perform: replay))
+          -                .accessibilityAction(named: Text(isPlaying ? "停止播放" : "重播原声"), replay)
+          +                .accessibilityAction(named: Text("重播原声"), replay)
+                   } else {
+                       translatable(content)
+                   }
+          --- a/Sources/App/SentencePlaybackQueue.swift
+          +++ b/Sources/App/SentencePlaybackQueue.swift
+          @@ -9,6 +9,12 @@
+                   if interject { items.insert(contentsOf: values, at: preservePreparedNext ? min(1, items.count) : 0) }
+                   else { items.append(contentsOf: values) }
+               }
+          +    func contains(where predicate: (Element) -> Bool) -> Bool { items.contains(where: predicate) }
+          +    mutating func promoteFirst(where predicate: (Element) -> Bool) {
+          +        guard let i = items.firstIndex(where: predicate), i != 0 else { return }
+          +        let selected = items.remove(at: i)
+          +        items.insert(selected, at: 0)
+          +    }
+               mutating func take() -> Element? { items.isEmpty ? nil : items.removeFirst() }
+               mutating func remove(where predicate: (Element) -> Bool) -> [Element] {
+                   let removed = items.filter(predicate)
+          --- /dev/null
+          +++ b/Tests/SpeechStreamResponse/main.swift
+          @@ -0,0 +1,63 @@
+          +import Foundation
+          +
+          +// PCMDownload uses the app's generic error only for excessive buffering.
+          +enum LokiError: Error { case message(String) }
+          +
+          +func check(_ status: Int?, _ mime: String? = "audio/pcm", _ rate: String? = "24000") -> SpeechStreamResponseError? {
+          +    SpeechStreamResponseError.check(status: status, mimeType: mime, sampleRate: rate)
+          +}
+          +
+          +precondition(check(200) == nil)
+          +precondition(check(200, "Audio/PCM") == nil)
+          +precondition(check(nil) == .missingHTTPResponse)
+          +precondition(check(200, "text/html") == .unexpectedFormat)
+          +precondition(check(200, nil) == .unexpectedFormat)
+          +precondition(check(200, "audio/pcm", nil) == .unexpectedSampleRate)
+          +precondition(check(200, "audio/pcm", "48000") == .unexpectedSampleRate)
+          +for status in [204, 302, 400, 401, 403, 404, 409, 413, 422, 429, 500, 502, 503, 504] {
+          +    let issue = check(status, "application/json", nil)
+          +    precondition(issue == .httpStatus(status))
+          +    let bridged = issue! as NSError
+          +    precondition(bridged.domain == "LokiSpeechStream" && bridged.code == status)
+          +    precondition(bridged.localizedDescription.contains("HTTP \(status)"))
+          +    precondition(!SpeechTransportRetry.shouldRetry(bridged, attempt: 0, receivedBytes: 0))
+          +}
+          +
+          +final class PlaybackFixture: URLProtocol {
+          +    override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "loki.invalid" }
+          +    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+          +    override func startLoading() {
+          +        let url = request.url!
+          +        let status = Int(url.lastPathComponent) ?? 200
+          +        let headers = ["Content-Type": url.path == "/html" ? "text/html" : "audio/pcm",
+          +                       "X-Audio-Sample-Rate": "24000"]
+          +        let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers)!
+          +        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+          +        client?.urlProtocol(self, didLoad: Data([4, 0, 8, 0]))
+          +        client?.urlProtocolDidFinishLoading(self)
+          +    }
+          +    override func stopLoading() {}
+          +}
+          +
+          +let fixtureConfig = URLSessionConfiguration.ephemeral
+          +fixtureConfig.protocolClasses = [PlaybackFixture.self]
+          +let fixtureTransport = PCMTransport(configuration: fixtureConfig)
+          +let fixtures: [(String, SpeechStreamResponseError?)] = [
+          +    ("200", nil), ("html", .unexpectedFormat), ("409", .httpStatus(409)), ("502", .httpStatus(502))
+          +]
+          +for (path, expected) in fixtures {
+          +    let download = PCMDownload(transport: fixtureTransport)
+          +    let request = URLRequest(url: URL(string: "https://loki.invalid/" + path)!)
+          +    var received = Data()
+          +    do {
+          +        for try await packet in download.stream(for: request) {
+          +            received.append(packet)
+          +            download.consumed(packet.count)
+          +        }
+          +        precondition(expected == nil && received == Data([4, 0, 8, 0]))
+          +    } catch {
+          +        guard let issue = error as? SpeechStreamResponseError else { fatalError("Unexpected error: \(error)") }
+          +        precondition(issue == expected && received.isEmpty)
+          +    }
+          +}
+          +print("Speech HTTP and format errors, retry policy and streamed PCM delivery passed.")
+          --- /dev/null
+          +++ b/Tests/ManualVoiceReplay/main.swift
+          @@ -0,0 +1,46 @@
+          +import Foundation
+          +
+          +let first = UUID(), second = UUID(), third = UUID()
+          +let originalTap = UUID(), repeatedTap = UUID(), audibleTap = UUID()
+          +var replay = ManualVoiceReplay()
+          +
+          +// While the first packet is pending, a tap joins the active sentence. Repeated taps
+          +// must neither toggle stop nor schedule another TTS request.
+          +precondition(replay.request(first, attempt: originalTap, active: first, audible: nil, queued: false) == .joinedStream)
+          +precondition(replay.request(first, attempt: repeatedTap, active: first, audible: nil, queued: false) == .alreadyPending)
+          +precondition(replay.phase(for: first, audible: nil) == .waiting)
+          +precondition(replay.beganOutput(second) == nil)
+          +precondition(replay.beganOutput(first) == originalTap)
+          +precondition(replay.beganOutput(first) == nil)
+          +precondition(replay.phase(for: first, audible: first) == .playing)
+          +precondition(replay.phase(for: first, audible: nil) == .waiting)
+          +
+          +// If audio is already coming out, queue one replay. Completion of the current
+          +// sound must not consume the queued replay even though it has the same message ID.
+          +precondition(replay.request(first, attempt: audibleTap, active: first, audible: first, queued: false) == .inserted)
+          +precondition(replay.request(first, attempt: repeatedTap, active: first, audible: first, queued: true) == .alreadyPending)
+          +precondition(replay.finish(first) == nil && replay[first]?.phase == .queued)
+          +precondition(replay.beganWaiting(first) == audibleTap)
+          +precondition(replay.beganOutput(first) == audibleTap)
+          +precondition(replay.finish(first) == audibleTap && !replay.hasPending)
+          +
+          +// An automatic packet which already exists is promoted, preserving every other
+          +// item once and in order. A failure while waiting allows an immediate new tap.
+          +var queue = SentencePlaybackQueue<UUID>()
+          +queue.insert([first, second, third], interject: false, preservePreparedNext: false)
+          +precondition(replay.request(second, attempt: originalTap, active: nil, audible: nil,
+          +    queued: queue.contains { $0 == second }) == .promoted)
+          +queue.promoteFirst { $0 == second }
+          +precondition(queue.take() == second && queue.take() == first && queue.take() == third && queue.isEmpty)
+          +precondition(replay.beganWaiting(second) == originalTap)
+          +precondition(replay.finish(second) == originalTap)
+          +precondition(replay.request(second, attempt: repeatedTap, active: nil, audible: nil, queued: false) == .inserted)
+          +replay.cancelAll()
+          +precondition(!replay.hasPending && replay.beganOutput(second) == nil)
+          +var cache = VoiceCacheRecovery()
+          +cache.failedToPlay(first)
+          +precondition(!cache.mayRead(first) && cache.mayRead(second))
+          +cache.failedToPlay(second)
+          +cache.savedReplacement(first)
+          +precondition(cache.mayRead(first) && !cache.mayRead(second))
+          +print("Manual voice replay and cache recovery passed")
+          LAUNCH_PATCH
+          shasum -a 256 -c - <<'VERIFIED'
+          147731aea7a387f6435cde7f3daa6d2e2b1a0334e67299ae75a413ecf5291a28  Sources/App/SpeechStreamResponseError.swift
+          7127456b0a30f047d7649c39757366285f59605d5f18ca1a058bb92abd49c6e3  Sources/App/PCMDownload.swift
+          0ebbb125c69b3d2285ee8717527cc79cebaba68a53d2ecf06aa18eef596658fa  Sources/App/ManualVoiceReplay.swift
+          9a41e7b8d5b57758d00dc67df0eaaa09b71ce790602e6e0524d2c990c33d9ac8  Sources/App/AppState.swift
+          4f3758c029d94920843feb2d42b481be04982397f8e8ccddbdc3929ba2f51c4b  Sources/App/VoiceService.swift
+          e2d485dab551dd79ed9aa24d6e93acdca3c0e41d102f12e0ea4361c169f9448d  Sources/App/ChatView.swift
+          5a03f44622ecce400214f9449772041833df090d3341fd355b51bee1d8d34839  Sources/App/SentencePlaybackQueue.swift
+          e04624b6926e9697aeb3df988ea81400c1970eea92b045e905a0ba39ea3b77cd  Tests/SpeechStreamResponse/main.swift
+          1fe524a156a1aa7b2d85c2c6a7454945d64e625723425a3c3ee969162769b133  Tests/ManualVoiceReplay/main.swift
+          VERIFIED
+          python3 - <<'VERSION'
+          from pathlib import Path
+          p=Path('project.yml')
+          s=p.read_text()
+          assert s.count('CURRENT_PROJECT_VERSION: 112304')==1 and '112305' not in s and 'LOKI_ISLAND_APP' in s and 'LOKI_ISLAND_WIDGET' in s
+          p.write_text(s.replace('CURRENT_PROJECT_VERSION: 112304','CURRENT_PROJECT_VERSION: 112305'))
+          VERSION
+      - name: Test original voice stream response errors
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc Sources/App/SpeechStreamResponseError.swift Sources/App/PCMDownload.swift Sources/App/SpeechTransportRetry.swift Tests/SpeechStreamResponse/main.swift -o "$RUNNER_TEMP/speech-response" && "$RUNNER_TEMP/speech-response"
+      - name: Test explicit voice replay and queue
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc Sources/App/ManualVoiceReplay.swift Sources/App/SentencePlaybackQueue.swift Tests/ManualVoiceReplay/main.swift -o "$RUNNER_TEMP/replay-tap" && "$RUNNER_TEMP/replay-tap"
+      - name: Test Island replay and timing
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc Sources/Shared/LokiIslandState.swift Sources/App/Models.swift Sources/App/IslandReplayTarget.swift Tests/IslandReplay/main.swift -o "$RUNNER_TEMP/replay" && "$RUNNER_TEMP/replay"
+      - name: Test desk reading continuation
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc Sources/App/DeskChapterContinuation.swift Tests/DeskIslandFlowTests/main.swift -o "$RUNNER_TEMP/desk-flow" && "$RUNNER_TEMP/desk-flow"
+      - name: Test music moment identity
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc Sources/App/MusicModels.swift Sources/App/MusicMoment.swift Tests/MusicMoments/main.swift -o "$RUNNER_TEMP/music-moments" && "$RUNNER_TEMP/music-moments"
+      - name: Test remote desk envelope decoding
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc Sources/Shared/LokiIslandState.swift Tests/DeskPushEnvelope/main.swift -o "$RUNNER_TEMP/desk-push-envelope" && "$RUNNER_TEMP/desk-push-envelope" Tests/DeskPushEnvelope/start.json
+      - name: Test HealthKit authorization group and OS version policy
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc -swift-version 5 Sources/App/HealthReadAccessPolicy.swift Tests/HealthReadAccess/main.swift -o "$RUNNER_TEMP/health-access"
+          "$RUNNER_TEMP/health-access"
+      - name: Test sleep selection and overnight readings
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc -swift-version 5 Sources/App/SleepIntervals.swift Sources/App/SleepDetails.swift Tests/SleepWakeHealth/main.swift -o "$RUNNER_TEMP/test-sleep-wake"
+          "$RUNNER_TEMP/test-sleep-wake"
+      - name: Health archive payload identity and binary reconstruction
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc -swift-version 5 Sources/App/HealthArchivePayload.swift Tests/HealthArchivePayload/main.swift -o "$RUNNER_TEMP/health-archive-payload"
+          "$RUNNER_TEMP/health-archive-payload"
+      - name: Health archive scheduling and fairness
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc -swift-version 5 Sources/App/HealthArchiveSchedule.swift Tests/HealthArchiveSchedule/main.swift -o "$RUNNER_TEMP/health-archive-scheduling"
+          "$RUNNER_TEMP/health-archive-scheduling"
+      - name: Test app presence, typing and voice activity
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc -swift-version 5 -parse-as-library Sources/App/CompanionInteraction.swift Tests/CompanionInteractionRegression/main.swift -o "$RUNNER_TEMP/test-interaction"
+          "$RUNNER_TEMP/test-interaction"
+      - name: Test message timestamps and legacy conversation order
+        shell: bash
+        working-directory: app-source
+        run: |
+          swiftc Sources/App/Models.swift Sources/App/ChatHistoryTiming.swift Tests/MessageTimes/main.swift -o "$RUNNER_TEMP/loki-message-times"
+          "$RUNNER_TEMP/loki-message-times"
+      - name: Test notification routing and inbox
+        shell: bash
+        working-directory: app-source
+        run: |
+          swiftc Sources/App/ChatNotificationInbox.swift Tests/NotificationRouting/main.swift -o "$RUNNER_TEMP/loki-notification-routing"
+          "$RUNNER_TEMP/loki-notification-routing"
+      - name: Test public reasoning and tool display
+        shell: bash
+        working-directory: app-source
+        run: |
+          awk '/^struct ChatItem:/ { exit } { print }' Sources/App/Models.swift > "$RUNNER_TEMP/display-tests.swift"
+          cat >> "$RUNNER_TEMP/display-tests.swift" <<'SWIFT'
+          let prefix = "Activity · Compare the two options."
+          let tool = "Used the music search tool."
+          let stages = "Activity · Received your message.\nWriting the reply."
+          precondition(TurnProgressContent(summary: prefix, activity: tool).summary == prefix)
+          precondition(TurnProgressContent(summary: prefix, activity: tool).activity == tool)
+          precondition(TurnProgressContent(summary: stages).isEmpty)
+          precondition(TurnProgressContent(summary: "Activity · " + tool, activity: tool).summary == nil)
+          precondition(TurnProgressContent(summary: "Activity · " + tool, activity: tool).activity == tool)
+          precondition(TurnProgressContent(summary: "Compare the options.").summary == "Compare the options.")
+          precondition(TurnProgressContent(activity: tool).summary == nil)
+          precondition(TurnProgressContent(activity: tool).activity == tool)
+          print("Public progress and tool display regressions passed")
+          SWIFT
+          swift "$RUNNER_TEMP/display-tests.swift"
+      - name: Verify calibrated pointer math
+        run: |
+          cat app-source/Sources/App/PhonePointerMath.swift app-source/review/tests/pointer-math-check.swift > /tmp/pointer-check.swift
+          swift /tmp/pointer-check.swift
+      - name: Generate project
+        working-directory: app-source
+        run: |
+          command -v xcodegen || brew install xcodegen
+          swift scripts/generate-app-icon.swift
+          xcodegen generate --spec project.yml
+          mkdir -p build
+      - name: Compile real iPhone architecture
+        working-directory: app-source
+        run: |
+          xcodebuild -project Loki.xcodeproj -scheme Loki -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/Device CODE_SIGNING_ALLOWED=NO build > build/device.log 2>&1 || { tail -100 build/device.log; exit 1; }
+          python3 scripts/verify-device-build.py build/Device/Build/Products/Debug-iphoneos/Loki.app
+          ditto -c -k --sequesterRsrc --keepParent build/Device/Build/Products/Debug-iphoneos/Loki.app build/Loki-screen-control-unsigned.zip
+      - name: Verify device App Intent metadata
+        working-directory: app-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'INTENTS'
+          from pathlib import Path
+          import json,plistlib
+          app=Path('build/Device/Build/Products/Debug-iphoneos/Loki.app')
+          widget=next(p for p in (app/'PlugIns').glob('*.appex') if 'liveactivity' in plistlib.loads((p/'Info.plist').read_bytes())['CFBundleIdentifier'])
+          expected={'LokiIslandAudioIntent','LokiMomentControlIntent'}
+          found=set()
+          for bundle in (app,widget):
+              m=bundle/'Metadata.appintents'/'extract.actionsdata'
+              if m.exists():
+                  data=json.dumps(json.loads(m.read_bytes()))
+                  found.update(s for s in expected if s in data)
+                  print(bundle.name,'extracted App Intent metadata',m.stat().st_size)
+              binary=bundle/plistlib.loads((bundle/'Info.plist').read_bytes())['CFBundleExecutable']
+              body=b''.join(p.read_bytes() for p in (binary,*bundle.glob('*.debug.dylib')))
+              assert all(x.encode() in body for x in expected),bundle.name
+          assert found==expected,sorted(expected-found)
+          INTENTS
+      - name: Upload verified iPhone architecture
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: loki-voice-replay-112305-device
+          path: |
+            app-source/build/device.log
+            app-source/build/Loki-screen-control-unsigned.zip
+          if-no-files-found: error
+          retention-days: 1
+      - name: Preserve compiler diagnostics if the device build fails
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: loki-voice-replay-112305-diagnostics
+          path: app-source/build/device.log
+          if-no-files-found: ignore
+          retention-days: 1
+      - name: Install and launch iPhone simulator build
+        working-directory: app-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcrun simctl list devices available -j > "$RUNNER_TEMP/island-devices.json"
+          xcrun simctl list runtimes -j > "$RUNNER_TEMP/island-runtimes.json"
+          device="$(python3 - "$RUNNER_TEMP/island-devices.json" "$RUNNER_TEMP/island-runtimes.json" <<'SELECT_DEVICE'
+          import json,re,sys
+          from pathlib import Path
+          by_runtime=json.loads(Path(sys.argv[1]).read_text())['devices']
+          runtimes={r['identifier']:r for r in json.loads(Path(sys.argv[2]).read_text())['runtimes']}
+          options=[]
+          for key,devices in by_runtime.items():
+              if '.iOS-' not in key:continue
+              match=re.match(r'([0-9]+)(?:[.-]([0-9]+))?',runtimes.get(key,{}).get('version','') or key.split('.iOS-')[-1])
+              if not match:continue
+              version=(int(match[1]),int(match[2] or 0))
+              if version<(26,0):continue
+              for d in devices:
+                  if d['name'].startswith('iPhone') and d.get('isAvailable',True):
+                      rank=(d['name']=='iPhone 18 Pro Max',version==(27,2),'Pro Max' in d['name'],version,'Pro' in d['name'])
+                      options.append((rank,d['udid'],d['name'],version))
+          assert options, 'No compatible iPhone simulator is installed'
+          _,udid,name,version=max(options)
+          print(f'Running on {name}, iOS {version[0]}.{version[1]}',file=sys.stderr)
+          print(udid)
+          SELECT_DEVICE
+          )"
+          xcrun simctl boot "$device" || true
+          xcrun simctl bootstatus "$device" -b
+          mkdir -p build
+          xcodebuild -project Loki.xcodeproj -scheme Loki -configuration Debug -sdk iphonesimulator -destination "id=$device" -derivedDataPath build/Simulator CODE_SIGNING_ALLOWED=NO build > build/simulator.log 2>&1 || { tail -100 build/simulator.log; exit 1; }
+          app='build/Simulator/Build/Products/Debug-iphonesimulator/Loki.app'
+          xcrun simctl install "$device" "$app"
+          bundle="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Info.plist")"
+          result="$(xcrun simctl launch "$device" "$bundle")"
+          pid="$(echo "$result" | awk '{print $NF}')"
+          sleep 3
+          ps -p "$pid" -o pid= >/dev/null
+          xcrun simctl terminate "$device" "$bundle"
+          second="$(xcrun simctl launch "$device" "$bundle")"
+          second_pid="$(echo "$second" | awk '{print $NF}')"
+          test "$pid" != "$second_pid"
+          sleep 5
+          ps -p "$second_pid" -o pid= >/dev/null
+          echo "Verified first and second launches for $bundle"
+      - name: Print simulator diagnostics
+        working-directory: app-source
+        if: failure()
+        shell: bash
+        run: |
+          if test -f build/simulator.log; then tail -100 build/simulator.log; fi
