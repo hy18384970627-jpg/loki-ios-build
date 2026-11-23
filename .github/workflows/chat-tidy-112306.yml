@@ -1,0 +1,504 @@
+name: Build Loki chat layout for iPhone 112306
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/chat-tidy-112306.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: loki-chat-tidy-112306
+  cancel-in-progress: false
+jobs:
+  app:
+    runs-on: xcode-27
+    timeout-minutes: 48
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-iphone-control
+          ref: 8be1a93226edf64a2be9678f429383bc891f3dce
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: d6b09385be43ff8b595f01c0729dad073f83fd82
+          path: verified-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: bdf05059603c369e0f2cceb56890ed1fa2f7d437
+          path: prior-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 3d5400d4edd282c8353fe9ca5f811e64fa35d2a5
+          path: notify-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 555062cda24502d988752cfb072df51bdf0498f4
+          path: time-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 3640476e16425c88d43f258027432c102838cb4a
+          path: mood-desk-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 94570727471955e14c95ba446dbef62aaeb29caa
+          path: health-wake-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: ee5fc9af98d33c71deb0661f8012cea46f2b87ae
+          path: launch-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 0872673023b590e71745ee3805dd865fd7d60140
+          path: consent-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 5c9a09a7a22e9cce113f09f8a9e01dc22ab7a08f
+          path: island-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 6d9820da3c1a2e39545b95fbe449ee4159d7c210
+          path: voice-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 1dc4b186993963063f659f1a1e00e20f2e86829d
+          path: appearance-base-recipe
+          persist-credentials: false
+      - name: Reconstruct the verified 112305 client
+        shell: bash
+        run: |
+          echo '6c1b3521ce390f751e28adb6331193427df54fbec7d667b3bd92378c34e79e50  appearance-base-recipe/.github/workflows/voice-replay-112305.yml' | shasum -a 256 -c -
+          ruby <<'PREVIOUS'
+          require 'yaml'
+          require 'json'
+          steps = YAML.load_file('appearance-base-recipe/.github/workflows/voice-replay-112305.yml').fetch('jobs').fetch('app').fetch('steps')
+          JSON.parse('["Reconstruct the verified 112304 client", "Apply reviewed voice replay changes"]').each do |name|
+            matches = steps.select { |s| s['name'] == name }
+            abort('Missing baseline step') unless matches.size == 1
+            step=matches.first
+            dir=step.fetch('working-directory','.')
+            abort('Unexpected baseline directory') unless ['.','app-source'].include?(dir)
+            system('/bin/bash','-e','-o','pipefail','-c',step.fetch('run'),chdir:dir) or abort(name)
+          end
+          PREVIOUS
+      - name: Apply reviewed chat appearance changes
+        working-directory: app-source
+        shell: bash
+        run: |
+          python3 - <<'BASE_CHECK'
+          from pathlib import Path
+          import hashlib, json
+          known = json.loads('{"Sources/App/ChatView.swift": "e2d485dab551dd79ed9aa24d6e93acdca3c0e41d102f12e0ea4361c169f9448d", "Sources/App/ToolsView.swift": "7a0852dc5788c4a8bc2c1bc7a819672f325bdec1ab63059e2ef292a7c88bb950"}')
+          for name, expected in known.items():
+              p=Path(name)
+              data=p.read_bytes()
+              clean=data.decode('utf-8-sig').replace(chr(13)+chr(10),chr(10)).encode()
+              assert hashlib.sha256(clean).hexdigest()==expected, name
+              if clean!=data: p.write_bytes(clean)
+          BASE_CHECK
+          shasum -a 256 -c - <<'BASELINE'
+          e2d485dab551dd79ed9aa24d6e93acdca3c0e41d102f12e0ea4361c169f9448d  Sources/App/ChatView.swift
+          7a0852dc5788c4a8bc2c1bc7a819672f325bdec1ab63059e2ef292a7c88bb950  Sources/App/ToolsView.swift
+          BASELINE
+          patch --batch -p1 <<'LAUNCH_PATCH'
+          --- a/Sources/App/ChatView.swift
+          +++ b/Sources/App/ChatView.swift
+          @@ -46,7 +46,6 @@
+               var body: some View {
+                   NavigationStack {
+                       VStack(spacing: 0) {
+          -                if let mood = app.mood, paired { MoodStrip(state: mood) }
+                           ScrollViewReader { proxy in
+                               ScrollView {
+                                   LazyVStack(alignment: .leading, spacing: 9) {
+          @@ -73,7 +72,6 @@
+                                           ChatBubble(message: message, beginsGroup: newGroup,
+                                                      isPlaying: message.recordedVoice == nil ? voice.audibleReplyID == message.id
+                                                          : voice.playing && voice.playingMessageID == message.id,
+          -                                           replayPhase: app.manualReplay.phase(for: message.id, audible: voice.audibleReplyID),
+                                                      canRetry: !app.callActive,
+                                                      preview: previewMessages != nil,
+                                                      playbackFraction: { voice.recordedPlaybackFraction(for: message.id) },
+          @@ -288,13 +286,10 @@
+                                   .renderingMode(.template)
+                                   .resizable().scaledToFit()
+                                   .foregroundStyle(.primary)
+          -                        .frame(width: 34, height: 17)
+          -                        .background {
+          -                            Capsule().fill(LokiDesign.ground.opacity(0.8))
+          -                                .frame(width: 29, height: 17)
+          -                        }
+          +                        .frame(width: 68, height: 34)
+                                   .accessibilityLabel("Loki")
+                           }
+          +                .sharedBackgroundVisibility(.hidden)
+                           ToolbarItem(placement: .topBarTrailing) {
+                               Button { composerFocused = false; call.start(app: app, voice: voice, health: health, alarms: alarms, focus: focus) } label: { Image(systemName: "phone") }
+                                   .accessibilityLabel("与 Loki 语音通话")
+          @@ -410,7 +405,6 @@
+               let message: ChatItem
+               let beginsGroup: Bool
+               let isPlaying: Bool
+          -    let replayPhase: ManualVoiceReplay.Phase?
+               let canRetry: Bool
+               let preview: Bool
+               let playbackFraction: () -> Double?
+          @@ -497,15 +491,6 @@
+                                                        replay: replay))
+                           .accessibilityLabel(outgoing ? "发出的消息" : "Loki 的消息")
+                           .accessibilityValue(message.recordedVoice.map { "语音 \(Int(ceil($0.duration))) 秒" } ?? message.displayText)
+          -                if let replayPhase {
+          -                    Group {
+          -                        switch replayPhase {
+          -                        case .queued: Label("已排队重播", systemImage: "clock")
+          -                        case .waiting: Label("正在准备原声…", systemImage: "hourglass")
+          -                        case .playing: Label("正在播放原声", systemImage: "speaker.wave.2")
+          -                        }
+          -                    }.font(.caption2).foregroundStyle(LokiDesign.gold)
+          -                }
+                           if let note = message.localActionNote {
+                               Text(note).font(.caption).padding(8)
+                                   .lokiPanel(fill: LokiDesign.raised, radius: 10)
+          --- a/Sources/App/ToolsView.swift
+          +++ b/Sources/App/ToolsView.swift
+          @@ -5,9 +5,18 @@
+           import PhotosUI
+           
+           struct ToolsView: View {
+          +    @EnvironmentObject private var app: AppState
+          +
+               var body: some View {
+                   NavigationStack {
+                       List {
+          +                if let mood = app.mood, app.paired {
+          +                    Section {
+          +                        MoodStrip(state: mood)
+          +                            .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
+          +                            .listRowBackground(LokiDesign.raised)
+          +                    }
+          +                }
+                           Section("生活与约定") {
+                               NavigationLink { MusicView() } label: { Label("一起听", systemImage: "music.note") }
+                               NavigationLink { ShoppingView() } label: { Label("淘宝", systemImage: "bag") }
+          @@ -28,7 +37,9 @@
+                               NavigationLink { SearchView() } label: { Label("搜索与计算", systemImage: "magnifyingglass") }
+                               NavigationLink { CapabilitiesView() } label: { Label("功能与 iOS 边界", systemImage: "list.bullet.rectangle") }
+                           }
+          -            }.navigationTitle("生活")
+          +            }
+          +            .navigationTitle("生活")
+          +            .task { await app.refreshMood() }
+                   }
+               }
+           }
+          LAUNCH_PATCH
+          shasum -a 256 -c - <<'VERIFIED'
+          60b2abee308cf6051a234b077995bc49ec33ee136f4fe752529b528edcc907e1  Sources/App/ChatView.swift
+          8878947e52dd56c0965a4f441dc4921a3668d61491f66e5016d015acea78abc5  Sources/App/ToolsView.swift
+          VERIFIED
+          python3 - <<'VERSION'
+          import subprocess
+          subprocess.run(['ruby','-ryaml','-e', r'''
+          p='project.yml'
+          spec=YAML.load_file(p)
+          settings=spec.fetch('settings').fetch('base')
+          abort 'Unexpected prior build' unless settings.fetch('CURRENT_PROJECT_VERSION').to_s=='112305'
+          settings['CURRENT_PROJECT_VERSION']='112306'
+          targets=spec.fetch('targets')
+          names=%w[Loki LokiLiveActivity FocusMonitor ShieldStyle ShieldActions UsageReport]
+          names.each do |name|
+            target=targets.fetch(name)
+            abort 'Unexpected bundle type' unless %w[application app-extension].include?(target.fetch('type'))
+            target.fetch('info').fetch('properties')['CFBundleVersion']='112306'
+          end
+          File.write(p,YAML.dump(spec))
+          '''],check=True)
+          VERSION
+      - name: Check chat and life appearance
+        working-directory: app-source
+        shell: bash
+        run: |
+          python3 - <<'CHECK'
+          from pathlib import Path
+          chat=Path('Sources/App/ChatView.swift').read_text()
+          life=Path('Sources/App/ToolsView.swift').read_text()
+          heading=chat.split('ToolbarItem(placement: .principal)',1)[1].split('ToolbarItem(placement: .topBarTrailing)',1)[0]
+          assert 'Image("LokiSignature")' in heading and '.frame(width: 68, height: 34)' in heading
+          assert '.sharedBackgroundVisibility(.hidden)' in heading and '.shadow(' not in heading and 'Capsule(' not in heading
+          assert 'MoodStrip(' not in chat and 'MoodStrip(state: mood)' in life and 'await app.refreshMood()' in life
+          assert all(word not in chat for word in ('已排队重播','正在准备原声…','正在播放原声'))
+          assert 'requestVoiceReplay(' in chat
+          print('Signature, mood placement and voice replay gesture confirmed')
+          CHECK
+      - name: Test original voice stream response errors
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc Sources/App/SpeechStreamResponseError.swift Sources/App/PCMDownload.swift Sources/App/SpeechTransportRetry.swift Tests/SpeechStreamResponse/main.swift -o "$RUNNER_TEMP/speech-response" && "$RUNNER_TEMP/speech-response"
+      - name: Test explicit voice replay and queue
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc Sources/App/ManualVoiceReplay.swift Sources/App/SentencePlaybackQueue.swift Tests/ManualVoiceReplay/main.swift -o "$RUNNER_TEMP/replay-tap" && "$RUNNER_TEMP/replay-tap"
+      - name: Test Island replay and timing
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc Sources/Shared/LokiIslandState.swift Sources/App/Models.swift Sources/App/IslandReplayTarget.swift Tests/IslandReplay/main.swift -o "$RUNNER_TEMP/replay" && "$RUNNER_TEMP/replay"
+      - name: Test desk reading continuation
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc Sources/App/DeskChapterContinuation.swift Tests/DeskIslandFlowTests/main.swift -o "$RUNNER_TEMP/desk-flow" && "$RUNNER_TEMP/desk-flow"
+      - name: Test music moment identity
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc Sources/App/MusicModels.swift Sources/App/MusicMoment.swift Tests/MusicMoments/main.swift -o "$RUNNER_TEMP/music-moments" && "$RUNNER_TEMP/music-moments"
+      - name: Test remote desk envelope decoding
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc Sources/Shared/LokiIslandState.swift Tests/DeskPushEnvelope/main.swift -o "$RUNNER_TEMP/desk-push-envelope" && "$RUNNER_TEMP/desk-push-envelope" Tests/DeskPushEnvelope/start.json
+      - name: Test HealthKit authorization group and OS version policy
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc -swift-version 5 Sources/App/HealthReadAccessPolicy.swift Tests/HealthReadAccess/main.swift -o "$RUNNER_TEMP/health-access"
+          "$RUNNER_TEMP/health-access"
+      - name: Test sleep selection and overnight readings
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc -swift-version 5 Sources/App/SleepIntervals.swift Sources/App/SleepDetails.swift Tests/SleepWakeHealth/main.swift -o "$RUNNER_TEMP/test-sleep-wake"
+          "$RUNNER_TEMP/test-sleep-wake"
+      - name: Health archive payload identity and binary reconstruction
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc -swift-version 5 Sources/App/HealthArchivePayload.swift Tests/HealthArchivePayload/main.swift -o "$RUNNER_TEMP/health-archive-payload"
+          "$RUNNER_TEMP/health-archive-payload"
+      - name: Health archive scheduling and fairness
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc -swift-version 5 Sources/App/HealthArchiveSchedule.swift Tests/HealthArchiveSchedule/main.swift -o "$RUNNER_TEMP/health-archive-scheduling"
+          "$RUNNER_TEMP/health-archive-scheduling"
+      - name: Test app presence, typing and voice activity
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc -swift-version 5 -parse-as-library Sources/App/CompanionInteraction.swift Tests/CompanionInteractionRegression/main.swift -o "$RUNNER_TEMP/test-interaction"
+          "$RUNNER_TEMP/test-interaction"
+      - name: Test message timestamps and legacy conversation order
+        shell: bash
+        working-directory: app-source
+        run: |
+          swiftc Sources/App/Models.swift Sources/App/ChatHistoryTiming.swift Tests/MessageTimes/main.swift -o "$RUNNER_TEMP/loki-message-times"
+          "$RUNNER_TEMP/loki-message-times"
+      - name: Test notification routing and inbox
+        shell: bash
+        working-directory: app-source
+        run: |
+          swiftc Sources/App/ChatNotificationInbox.swift Tests/NotificationRouting/main.swift -o "$RUNNER_TEMP/loki-notification-routing"
+          "$RUNNER_TEMP/loki-notification-routing"
+      - name: Test public reasoning and tool display
+        shell: bash
+        working-directory: app-source
+        run: |
+          awk '/^struct ChatItem:/ { exit } { print }' Sources/App/Models.swift > "$RUNNER_TEMP/display-tests.swift"
+          cat >> "$RUNNER_TEMP/display-tests.swift" <<'SWIFT'
+          let prefix = "Activity · Compare the two options."
+          let tool = "Used the music search tool."
+          let stages = "Activity · Received your message.\nWriting the reply."
+          precondition(TurnProgressContent(summary: prefix, activity: tool).summary == prefix)
+          precondition(TurnProgressContent(summary: prefix, activity: tool).activity == tool)
+          precondition(TurnProgressContent(summary: stages).isEmpty)
+          precondition(TurnProgressContent(summary: "Activity · " + tool, activity: tool).summary == nil)
+          precondition(TurnProgressContent(summary: "Activity · " + tool, activity: tool).activity == tool)
+          precondition(TurnProgressContent(summary: "Compare the options.").summary == "Compare the options.")
+          precondition(TurnProgressContent(activity: tool).summary == nil)
+          precondition(TurnProgressContent(activity: tool).activity == tool)
+          print("Public progress and tool display regressions passed")
+          SWIFT
+          swift "$RUNNER_TEMP/display-tests.swift"
+      - name: Verify calibrated pointer math
+        run: |
+          cat app-source/Sources/App/PhonePointerMath.swift app-source/review/tests/pointer-math-check.swift > /tmp/pointer-check.swift
+          swift /tmp/pointer-check.swift
+      - name: Generate project
+        working-directory: app-source
+        run: |
+          command -v xcodegen || brew install xcodegen
+          swift scripts/generate-app-icon.swift
+          xcodegen generate --spec project.yml
+          mkdir -p build
+      - name: Compile real iPhone architecture
+        working-directory: app-source
+        run: |
+          xcodebuild -project Loki.xcodeproj -scheme Loki -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/Device CODE_SIGNING_ALLOWED=NO build > build/device.log 2>&1 || { tail -100 build/device.log; exit 1; }
+          python3 scripts/verify-device-build.py build/Device/Build/Products/Debug-iphoneos/Loki.app
+          ditto -c -k --sequesterRsrc --keepParent build/Device/Build/Products/Debug-iphoneos/Loki.app build/Loki-screen-control-unsigned.zip
+      - name: Verify device App Intent metadata
+        working-directory: app-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'INTENTS'
+          from pathlib import Path
+          import json,plistlib
+          app=Path('build/Device/Build/Products/Debug-iphoneos/Loki.app')
+          widget=next(p for p in (app/'PlugIns').glob('*.appex') if 'liveactivity' in plistlib.loads((p/'Info.plist').read_bytes())['CFBundleIdentifier'])
+          infos=[app/'Info.plist', *sorted(app.glob('PlugIns/*.appex/Info.plist'))]
+          assert len(infos)==6, 'Expected the app and five extensions'
+          assert all(plistlib.loads(p.read_bytes())['CFBundleVersion']=='112306' for p in infos), 'Bundle version mismatch'
+          print('Verified six iPhoneOS bundle versions at 112306')
+          expected={'LokiIslandAudioIntent','LokiMomentControlIntent'}
+          found=set()
+          for bundle in (app,widget):
+              m=bundle/'Metadata.appintents'/'extract.actionsdata'
+              if m.exists():
+                  data=json.dumps(json.loads(m.read_bytes()))
+                  found.update(s for s in expected if s in data)
+                  print(bundle.name,'extracted App Intent metadata',m.stat().st_size)
+              binary=bundle/plistlib.loads((bundle/'Info.plist').read_bytes())['CFBundleExecutable']
+              body=b''.join(p.read_bytes() for p in (binary,*bundle.glob('*.debug.dylib')))
+              assert all(x.encode() in body for x in expected),bundle.name
+          assert found==expected,sorted(expected-found)
+          INTENTS
+      - name: Upload verified iPhone architecture
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: loki-chat-tidy-112306-device
+          path: |
+            app-source/build/device.log
+            app-source/build/Loki-screen-control-unsigned.zip
+          if-no-files-found: error
+          retention-days: 1
+      - name: Preserve compiler diagnostics if the device build fails
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: loki-chat-tidy-112306-diagnostics
+          path: app-source/build/device.log
+          if-no-files-found: ignore
+          retention-days: 1
+      - name: Install and launch iPhone simulator build
+        working-directory: app-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcrun simctl list devices available -j > "$RUNNER_TEMP/island-devices.json"
+          xcrun simctl list runtimes -j > "$RUNNER_TEMP/island-runtimes.json"
+          device="$(python3 - "$RUNNER_TEMP/island-devices.json" "$RUNNER_TEMP/island-runtimes.json" <<'SELECT_DEVICE'
+          import json,re,sys
+          from pathlib import Path
+          by_runtime=json.loads(Path(sys.argv[1]).read_text())['devices']
+          runtimes={r['identifier']:r for r in json.loads(Path(sys.argv[2]).read_text())['runtimes']}
+          options=[]
+          for key,devices in by_runtime.items():
+              if '.iOS-' not in key:continue
+              match=re.match(r'([0-9]+)(?:[.-]([0-9]+))?',runtimes.get(key,{}).get('version','') or key.split('.iOS-')[-1])
+              if not match:continue
+              version=(int(match[1]),int(match[2] or 0))
+              if version<(26,0):continue
+              for d in devices:
+                  if d['name'].startswith('iPhone') and d.get('isAvailable',True):
+                      rank=(d['name']=='iPhone 18 Pro Max',version==(27,2),'Pro Max' in d['name'],version,'Pro' in d['name'])
+                      options.append((rank,d['udid'],d['name'],version))
+          assert options, 'No compatible iPhone simulator is installed'
+          _,udid,name,version=max(options)
+          print(f'Running on {name}, iOS {version[0]}.{version[1]}',file=sys.stderr)
+          print(udid)
+          SELECT_DEVICE
+          )"
+          xcrun simctl boot "$device" || true
+          xcrun simctl bootstatus "$device" -b
+          mkdir -p build
+          xcodebuild -project Loki.xcodeproj -scheme Loki -configuration Debug -sdk iphonesimulator -destination "id=$device" -derivedDataPath build/Simulator CODE_SIGNING_ALLOWED=NO build > build/simulator.log 2>&1 || { tail -100 build/simulator.log; exit 1; }
+          app='build/Simulator/Build/Products/Debug-iphonesimulator/Loki.app'
+          python3 - "$app" <<'VERIFY_SIM_BUILD'
+          import plistlib,sys
+          from pathlib import Path
+          app=Path(sys.argv[1]); infos=[app/'Info.plist',*sorted(app.glob('PlugIns/*.appex/Info.plist'))]
+          assert len(infos)==6 and all(plistlib.loads(p.read_bytes())['CFBundleVersion']=='112306' for p in infos)
+          print('Verified six simulator bundle versions at 112306')
+          VERIFY_SIM_BUILD
+          xcrun simctl install "$device" "$app"
+          bundle="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Info.plist")"
+          result="$(xcrun simctl launch "$device" "$bundle")"
+          pid="$(echo "$result" | awk '{print $NF}')"
+          sleep 3
+          ps -p "$pid" -o pid= >/dev/null
+          xcrun simctl terminate "$device" "$bundle"
+          second="$(xcrun simctl launch "$device" "$bundle")"
+          second_pid="$(echo "$second" | awk '{print $NF}')"
+          test "$pid" != "$second_pid"
+          sleep 5
+          ps -p "$second_pid" -o pid= >/dev/null
+          echo "Verified first and second launches for $bundle"
+      - name: Capture isolated simulator signature sample
+        id: header_preview
+        continue-on-error: true
+        working-directory: app-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          device="$(xcrun simctl list devices booted -j | python3 -c "import json,sys;print(next(x['udid'] for ds in json.load(sys.stdin)['devices'].values() for x in ds if x['name']=='iPhone 18 Pro Max' and x['state']=='Booted'))")"
+          bundle=dev.zcydrkv7yh.loki
+          xcrun simctl terminate "$device" "$bundle"
+          xcrun simctl launch "$device" "$bundle" --loki-design-chat -AppleLanguages '(zh-Hans)' -AppleLocale zh_CN
+          sleep 5
+          xcrun simctl io "$device" screenshot "$RUNNER_TEMP/header-source.png"
+          cat > "$RUNNER_TEMP/header-crop.swift" <<'CROP'
+          import Foundation
+          import CoreGraphics
+          import ImageIO
+          import UniformTypeIdentifiers
+          let directory=URL(fileURLWithPath: CommandLine.arguments[1],isDirectory:true)
+          guard let source=CGImageSourceCreateWithURL(directory.appendingPathComponent("header-source.png") as CFURL,nil),
+                let image=CGImageSourceCreateImageAtIndex(source,0,nil) else { exit(2) }
+          let w=Double(image.width),h=Double(image.height)
+          let frame=CGRect(x:w*0.33, y:h*0.060, width:w*0.34, height:h*0.050).integral
+          guard let title=image.cropping(to:frame), let destination=CGImageDestinationCreateWithURL(directory.appendingPathComponent("chat-header.png") as CFURL,UTType.png.identifier as CFString,1,nil) else { exit(3) }
+          CGImageDestinationAddImage(destination,title,nil)
+          guard CGImageDestinationFinalize(destination) else { exit(4) }
+          print("Simulator header crop:", title.width, "by", title.height)
+          CROP
+          swift "$RUNNER_TEMP/header-crop.swift" "$RUNNER_TEMP"
+      - name: Upload cropped simulator signature
+        if: steps.header_preview.outcome == 'success'
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: loki-chat-tidy-112306-header
+          path: ${{ runner.temp }}/chat-header.png
+          if-no-files-found: error
+          retention-days: 1
+      - name: Print simulator diagnostics
+        working-directory: app-source
+        if: failure()
+        shell: bash
+        run: |
+          if test -f build/simulator.log; then tail -100 build/simulator.log; fi
