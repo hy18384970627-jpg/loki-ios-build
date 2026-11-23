@@ -795,11 +795,22 @@ jobs:
           1fe524a156a1aa7b2d85c2c6a7454945d64e625723425a3c3ee969162769b133  Tests/ManualVoiceReplay/main.swift
           VERIFIED
           python3 - <<'VERSION'
-          from pathlib import Path
-          p=Path('project.yml')
-          s=p.read_text()
-          assert s.count('CURRENT_PROJECT_VERSION: 112304')==1 and '112305' not in s and 'LOKI_ISLAND_APP' in s and 'LOKI_ISLAND_WIDGET' in s
-          p.write_text(s.replace('CURRENT_PROJECT_VERSION: 112304','CURRENT_PROJECT_VERSION: 112305'))
+          import subprocess
+          subprocess.run(['ruby','-ryaml','-e', r'''
+          p='project.yml'
+          spec=YAML.load_file(p)
+          settings=spec.fetch('settings').fetch('base')
+          abort 'Unexpected prior build' unless settings.fetch('CURRENT_PROJECT_VERSION').to_s=='112304'
+          settings['CURRENT_PROJECT_VERSION']='112305'
+          targets=spec.fetch('targets')
+          names=%w[Loki LokiLiveActivity FocusMonitor ShieldStyle ShieldActions UsageReport]
+          names.each do |name|
+            target=targets.fetch(name)
+            abort 'Unexpected bundle type' unless %w[application app-extension].include?(target.fetch('type'))
+            target.fetch('info').fetch('properties')['CFBundleVersion']='112305'
+          end
+          File.write(p,YAML.dump(spec))
+          '''],check=True)
           VERSION
       - name: Test original voice stream response errors
         working-directory: app-source
@@ -920,6 +931,10 @@ jobs:
           import json,plistlib
           app=Path('build/Device/Build/Products/Debug-iphoneos/Loki.app')
           widget=next(p for p in (app/'PlugIns').glob('*.appex') if 'liveactivity' in plistlib.loads((p/'Info.plist').read_bytes())['CFBundleIdentifier'])
+          infos=[app/'Info.plist', *sorted(app.glob('PlugIns/*.appex/Info.plist'))]
+          assert len(infos)==6, 'Expected the app and five extensions'
+          assert all(plistlib.loads(p.read_bytes())['CFBundleVersion']=='112305' for p in infos), 'Bundle version mismatch'
+          print('Verified six iPhoneOS bundle versions at 112305')
           expected={'LokiIslandAudioIntent','LokiMomentControlIntent'}
           found=set()
           for bundle in (app,widget):
@@ -984,6 +999,13 @@ jobs:
           mkdir -p build
           xcodebuild -project Loki.xcodeproj -scheme Loki -configuration Debug -sdk iphonesimulator -destination "id=$device" -derivedDataPath build/Simulator CODE_SIGNING_ALLOWED=NO build > build/simulator.log 2>&1 || { tail -100 build/simulator.log; exit 1; }
           app='build/Simulator/Build/Products/Debug-iphonesimulator/Loki.app'
+          python3 - "$app" <<'VERIFY_SIM_BUILD'
+          import plistlib,sys
+          from pathlib import Path
+          app=Path(sys.argv[1]); infos=[app/'Info.plist',*sorted(app.glob('PlugIns/*.appex/Info.plist'))]
+          assert len(infos)==6 and all(plistlib.loads(p.read_bytes())['CFBundleVersion']=='112305' for p in infos)
+          print('Verified six simulator bundle versions at 112305')
+          VERIFY_SIM_BUILD
           xcrun simctl install "$device" "$app"
           bundle="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Info.plist")"
           result="$(xcrun simctl launch "$device" "$bundle")"
