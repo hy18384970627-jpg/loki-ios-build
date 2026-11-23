@@ -1,0 +1,698 @@
+name: Test and build Loki health launch fix 112302
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/health-launch-112302.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: loki-health-launch-112302
+  cancel-in-progress: false
+jobs:
+  app:
+    runs-on: xcode-27
+    timeout-minutes: 48
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-iphone-control
+          ref: 8be1a93226edf64a2be9678f429383bc891f3dce
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: d6b09385be43ff8b595f01c0729dad073f83fd82
+          path: verified-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: bdf05059603c369e0f2cceb56890ed1fa2f7d437
+          path: prior-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 3d5400d4edd282c8353fe9ca5f811e64fa35d2a5
+          path: notify-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 555062cda24502d988752cfb072df51bdf0498f4
+          path: time-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 3640476e16425c88d43f258027432c102838cb4a
+          path: mood-desk-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: 94570727471955e14c95ba446dbef62aaeb29caa
+          path: health-wake-base-recipe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: hy18384970627-jpg/loki-ios-build
+          ref: ee5fc9af98d33c71deb0661f8012cea46f2b87ae
+          path: launch-base-recipe
+          persist-credentials: false
+      - name: Reconstruct the verified 112301 client
+        shell: bash
+        run: |
+          echo 'd7d9ffe68abef819c9eb12de354252a080281ccee8b6984bb02068ca3c660e0a  launch-base-recipe/.github/workflows/health-wake-112301.yml' | shasum -a 256 -c -
+          ruby <<'PREVIOUS'
+          require 'yaml'
+          require 'json'
+          steps = YAML.load_file('launch-base-recipe/.github/workflows/health-wake-112301.yml').fetch('jobs').fetch('app').fetch('steps')
+          JSON.parse('["Reconstruct verified public build 112104", "Stage reviewed Swift changes 1", "Stage reviewed Swift changes 2", "Stage reviewed Swift changes 3", "Stage reviewed Swift changes 4", "Stage reviewed Swift changes 5", "Stage reviewed Swift changes 6", "Stage reviewed Swift changes 7", "Stage reviewed Swift changes 8", "Stage reviewed Swift changes 9", "Apply reviewed wake and health changes"]').each do |name|
+            matches = steps.select { |s| s['name'] == name }
+            abort('Missing baseline step') unless matches.size == 1
+            step=matches.first
+            dir=step.fetch('working-directory','.')
+            abort('Unexpected baseline directory') unless ['.','app-source'].include?(dir)
+            system('/bin/bash','-e','-o','pipefail','-c',step.fetch('run'),chdir:dir) or abort(name)
+          end
+          PREVIOUS
+      - name: Apply reviewed launch changes
+        working-directory: app-source
+        shell: bash
+        run: |
+          shasum -a 256 -c - <<'BASELINE'
+          03fcc8edad37f05d8f696c8c6150524dd28ef316705b097047368ea1b2ef13b8  Sources/App/NativeHealthInventory.swift
+          29b83a6525b12cad338d082e6921e0e4860c72ce336e3af3b60376e8c3db7d1f  Sources/App/HealthService.swift
+          a0a5450b36813ac3f85210736957cc6a369bc88995e36732ac3b65504f42be43  Sources/App/LokiApp.swift
+          BASELINE
+          patch --batch -p1 <<'LAUNCH_PATCH'
+          --- a/Sources/App/NativeHealthInventory.swift
+          +++ b/Sources/App/NativeHealthInventory.swift
+          @@ -30,8 +30,26 @@
+               private var state: HealthArchiveSchedule?
+               private var task: Task<Void, Never>?
+               private var registration: Task<Void, Never>?
+          -    private var observer: HKObserverQuery?
+          -    private var observerTypes: Set<String> = []
+          +    private var observers: [String: HKObserverQuery] = [:]
+          +    var observerIDs: Set<String> { Set(observers.keys) }
+          +    private var needsFullCheck = false
+          +    private var reviewSelections = false
+          +    private var lastCatchUp = Date.distantPast
+          +    private let extraObserverTypes: [HKSampleType] = {
+          +        let quantities: [HKQuantityTypeIdentifier] = [.basalBodyTemperature, .bodyMass, .restingHeartRate, .activeEnergyBurned]
+          +        let categories: [HKCategoryTypeIdentifier] = [.menstrualFlow, .ovulationTestResult]
+          +        return quantities.compactMap { HKObjectType.quantityType(forIdentifier: $0) as HKSampleType? }
+          +             + categories.compactMap { HKObjectType.categoryType(forIdentifier: $0) as HKSampleType? }
+          +    }()
+          +    func requestCatchUp(foreground: Bool = false) {
+          +        guard ready else { return }
+          +        if foreground || Date().timeIntervalSince(lastCatchUp) >= 900 {
+          +            needsFullCheck = true
+          +            reviewSelections = true
+          +            lastCatchUp = .now
+          +        }
+          +        schedule(force: true)
+          +    }
+               private var transientDirty: Set<String> = []
+               private var revision = 0
+               private var runAgain = false
+          @@ -51,15 +69,30 @@
+                   result.insert(HKObjectType.activitySummaryType())
+                   return result
+               }
+          -    var sampleTypes: [HKSampleType] {
+          -        var all = HealthArchiveCatalog.ordinary + HealthArchiveCatalog.correlations + HealthArchiveSpecial.sampleTypes
+          -        if UserDefaults.standard.bool(forKey: "healthArchiveClinical") { all += HealthArchiveSpecial.clinicalTypes }
+          -        var seen: Set<String> = []
+          -        return all.filter { seen.insert($0.identifier).inserted }
+          -    }
+          -    private func lookup() -> [String: HKSampleType] {
+          -        Dictionary(uniqueKeysWithValues: sampleTypes.map { ($0.identifier, $0) })
+          -    }
+          +    // The medication-dose sample uses an anchored query after authorizing the
+          +    // medication directory (WWDC25/321). The vision-prescription type requires
+          +    // per-object access and a complete HKSampleQuery selection read.
+          +    private func anchoredTypes(includeClinical: Bool, includeDoses: Bool) -> [String: HKSampleType] {
+          +        var types = HealthArchiveCatalog.ordinary + HealthArchiveCatalog.correlations + HealthArchiveSpecial.sampleTypes
+          +        if includeClinical { types += HealthArchiveSpecial.clinicalTypes }
+          +        let supported = types.filter { type in
+          +            if type == HKObjectType.visionPrescriptionType() { return false }
+          +            if type == HKObjectType.medicationDoseEventType() { return includeDoses }
+          +            return !type.requiresPerObjectAuthorization()
+          +        }
+          +        return Dictionary(supported.map { ($0.identifier, $0) }, uniquingKeysWith: { first, _ in first })
+          +    }
+          +    #if targetEnvironment(simulator)
+          +    // The restore-launch smoke test can construct every eligible archive query even
+          +    // without a paired gateway or any personal records. Do not execute these queries.
+          +    func validateArchiveQueriesForSimulator() -> [String] {
+          +        let types = anchoredTypes(includeClinical: true, includeDoses: true)
+          +        for type in types.values {
+          +            _ = HKAnchoredObjectQuery(type: type, predicate: nil, anchor: nil, limit: 1) { _, _, _, _, _ in }
+          +        }
+          +        return types.keys.sorted()
+          +    }
+          +    #endif
+               func requestClinical() async throws {
+                   var types = Set(HealthArchiveSpecial.clinicalTypes.map { $0 as HKObjectType })
+                   if let document = HealthArchiveDocuments.type { types.insert(document) }
+          @@ -82,8 +115,7 @@
+                   state?.anchors = [:]; state?.queued = []; state?.lastReconciliation = nil
+                   lastSync = .distantPast; retryAfter = [:]
+                   try? persist()
+          -        if UserDefaults.standard.bool(forKey: "healthBackground") { installObserver() }
+          -        schedule(force: true)
+          +        requestCatchUp(foreground: true)
+               }
+               private func cancel() {
+                   revision += 1
+          @@ -104,50 +136,42 @@
+               func stopObserver() {
+                   registration?.cancel()
+                   registration = nil
+          -        if let observer { store.stop(observer) }
+          -        observer = nil
+          -        observerTypes = []
+          -    }
+          -    func installObserver() {
+          -        guard UserDefaults.standard.bool(forKey: "healthAutoSync") else { return }
+          -        let types = sampleTypes
+          -        let ids = Set(types.map(\.identifier))
+          -        guard ids != observerTypes else { return }
+          +        for query in observers.values { store.stop(query) }
+          +        observers.removeAll()
+          +    }
+          +    func installObserver(excluding core: Set<String>) {
+          +        guard HKHealthStore.isHealthDataAvailable(), UserDefaults.standard.bool(forKey: "healthAutoSync") else { return }
+          +        let types = extraObserverTypes.filter { !core.contains($0.identifier) && !$0.requiresPerObjectAuthorization() }
+          +        guard Set(types.map(\.identifier)) != observerIDs else { return }
+                   stopObserver()
+          -        observerTypes = ids
+          -        let query = HKObserverQuery(queryDescriptors: types.map { HKQueryDescriptor(sampleType: $0, predicate: nil) }) {
+          -            [weak self] _, changed, complete, error in
+          -            Task { @MainActor in
+          -                guard let self, self.ready, error == nil else { complete(); return }
+          -                let ids = changed?.map(\.identifier) ?? []
+          -                self.transientDirty.formUnion(ids)
+          -                if self.state != nil {
+          -                    for id in ids {
+          -                        for key in HealthArchiveSchedule.lanes(id) { self.state?.enqueue(key) }
+          -                    }
+          -                    try? self.persist()
+          -                }
+          -                // The work survives process death in the anchors; protected data is retried on unlock.
+          -                complete()
+          -                self.schedule(force: true)
+          -            }
+          -        }
+          -        observer = query
+          -        store.execute(query)
+          +        for type in types {
+          +            let id = type.identifier
+          +            let query = HKObserverQuery(sampleType: type, predicate: nil) { [weak self] _, complete, error in
+          +                Task { @MainActor in
+          +                    guard let self, self.ready, error == nil else { complete(); return }
+          +                    self.markObserved(id)
+          +                    complete()
+          +                }
+          +            }
+          +            store.execute(query)
+          +            observers[id] = query
+          +        }
+                   registration = Task { [weak self] in
+                       guard let self else { return }
+                       for type in types {
+                           guard !Task.isCancelled, UserDefaults.standard.bool(forKey: "healthAutoSync") else { return }
+          -                // The summary service registers its six time-sensitive types at immediate frequency.
+          -                let summaryIDs: Set<String> = [HKQuantityTypeIdentifier.heartRate.rawValue,
+          -                    HKQuantityTypeIdentifier.heartRateVariabilitySDNN.rawValue, HKQuantityTypeIdentifier.stepCount.rawValue,
+          -                    HKQuantityTypeIdentifier.respiratoryRate.rawValue, HKQuantityTypeIdentifier.appleSleepingWristTemperature.rawValue,
+          -                    HKCategoryTypeIdentifier.sleepAnalysis.rawValue]
+          -                if !summaryIDs.contains(type.identifier) {
+          -                    try? await self.store.enableBackgroundDelivery(for: type, frequency: .hourly)
+          -                }
+          -            }
+          -        }
+          +                try? await self.store.enableBackgroundDelivery(for: type, frequency: .hourly)
+          +            }
+          +        }
+          +    }
+          +    func markObserved(_ id: String) {
+          +        guard ready else { return }
+          +        transientDirty.insert(id)
+          +        if state != nil {
+          +            for key in HealthArchiveSchedule.lanes(id) { state?.enqueue(key) }
+          +            try? persist()
+          +        }
+          +        requestCatchUp()
+               }
+               func schedule(force: Bool = false) {
+                   guard ready else { return }
+          @@ -194,18 +218,22 @@
+                       let fresh = state?.epoch != epoch
+                       if fresh { state = .init(epoch: epoch); lastSync = .distantPast; retryAfter = [:] }
+                       retryAfter = retryAfter.filter { $0.value > Date() }
+          -            let types = lookup()
+          +            let settings = UserDefaults.standard
+          +            let types = anchoredTypes(includeClinical: settings.bool(forKey: "healthArchiveClinical"),
+          +                                      includeDoses: settings.bool(forKey: "healthArchiveIndividual"))
+                       let priority = ["HKCategoryTypeIdentifierMenstrualFlow", "HKCategoryTypeIdentifierOvulationTestResult",
+                                       "HKCategoryTypeIdentifierSleepAnalysis", "HKQuantityTypeIdentifierHeartRateVariabilitySDNN"]
+                       let ids = priority.filter { types[$0] != nil } + types.keys.filter { !priority.contains($0) }.sorted()
+          -            let reconcile = Date().timeIntervalSince(state?.lastReconciliation ?? .distantPast) > 4 * 3600
+          +            let reconcile = needsFullCheck || Date().timeIntervalSince(state?.lastReconciliation ?? .distantPast) > 4 * 3600
+          +            needsFullCheck = false
+                       state?.register(ids, recheck: reconcile)
+                       if reconcile { state?.lastReconciliation = .now }
+                       let dirty = transientDirty
+                       transientDirty.removeAll()
+                       for id in dirty { for key in HealthArchiveSchedule.lanes(id) { state?.enqueue(key) } }
+                       try persist()
+          -            if Date().timeIntervalSince(lastSync) > 12 * 3600 {
+          +            if reviewSelections || Date().timeIntervalSince(lastSync) > 12 * 3600 {
+          +                reviewSelections = false
+                           do { try await snapshots(api: api, epoch: epoch, serial: serial); lastSync = .now }
+                           catch is CancellationError { return false }
+                           catch { lastSync = Date().addingTimeInterval(-12 * 3600 + 300) }
+          @@ -271,6 +299,15 @@
+               }
+               private func page(_ type: HKSampleType, key: String, api: MobileAPI, epoch: String, serial: Int) async throws {
+                   let page = try await read(type, key: key)
+          +        try await publish(page.samples, deleted: page.deleted, type: type, api: api, epoch: epoch, serial: serial)
+          +        let blob = try NSKeyedArchiver.archivedData(withRootObject: page.anchor, requiringSecureCoding: true)
+          +        state?.acknowledge(key, anchor: blob, hasMore: page.samples.count + page.deleted.count >= pageSize)
+          +        // A write racing an observer callback gets a further (normally empty) anchored read.
+          +        if transientDirty.contains(type.identifier) { state?.enqueue(key) }
+          +        try persist()
+          +    }
+          +    private func publish(_ samples: [HKSample], deleted: [String], type: HKSampleType,
+          +                         api: MobileAPI, epoch: String, serial: Int) async throws {
+                   try active(serial)
+                   let id = type.identifier
+                   var records: [[String: Any]] = []
+          @@ -282,7 +319,7 @@
+                           }
+                       }
+                   }
+          -        for sample in page.samples {
+          +        for sample in samples {
+                       try active(serial)
+                       var row = Self.baseRecord(sample)
+                       var details = Self.metadata(sample)
+          @@ -325,21 +362,37 @@
+                   if !remainingParts.isEmpty {
+                       try await upload(remainingParts, deleted: [], type: id, api: api, epoch: epoch, serial: serial)
+                   }
+          -        if !records.isEmpty || !page.deleted.isEmpty {
+          -            try await upload(records, deleted: page.deleted, type: id, api: api, epoch: epoch, serial: serial)
+          +        if !records.isEmpty || !deleted.isEmpty {
+          +            try await upload(records, deleted: deleted, type: id, api: api, epoch: epoch, serial: serial)
+                   }
+                   try active(serial)
+          -        if id == HKObjectType.visionPrescriptionType().identifier {
+          -            var known = Set(state?.knownStock[id] ?? [])
+          -            known.formUnion(records.compactMap { $0["id"] as? String })
+          -            known.subtract(page.deleted)
+          -            state?.knownStock[id] = Array(known)
+          -        }
+          -        let blob = try NSKeyedArchiver.archivedData(withRootObject: page.anchor, requiringSecureCoding: true)
+          -        state?.acknowledge(key, anchor: blob, hasMore: page.samples.count + page.deleted.count >= pageSize)
+          -        // A write racing an observer callback gets a further (normally empty) anchored read.
+          -        if transientDirty.contains(id) { state?.enqueue(key) }
+          -        try persist()
+          +    }
+          +    // The store only returns the prescriptions the person selected. Upload new
+          +    // records in bounded pages from ONE successful read of that complete list.
+          +    private func syncVision(api: MobileAPI, epoch: String, serial: Int) async throws {
+          +        let type = HKObjectType.visionPrescriptionType()
+          +        let key = type.identifier
+          +        let samples: [HKSample]? = await withCheckedContinuation { continuation in
+          +            let query = HKSampleQuery(sampleType: type, predicate: nil, limit: HKObjectQueryNoLimit, sortDescriptors: nil) {
+          +                _, samples, error in
+          +                continuation.resume(returning: error == nil ? (samples ?? []) : nil)
+          +            }
+          +            store.execute(query)
+          +        }
+          +        guard let samples else { return }
+          +        try active(serial)
+          +        var known = Set(state?.knownStock[key] ?? [])
+          +        let visible = Set(samples.map { $0.uuid.uuidString.lowercased() })
+          +        let removed = known.subtracting(visible)
+          +        let new = samples.filter { !known.contains($0.uuid.uuidString.lowercased()) }
+          +        for start in stride(from: 0, to: max(1, new.count), by: pageSize) {
+          +            let batch = Array(new[start..<min(start + pageSize, new.count)])
+          +            try await publish(batch, deleted: start == 0 ? Array(removed) : [], type: type, api: api, epoch: epoch, serial: serial)
+          +            known.subtract(removed)
+          +            known.formUnion(batch.map { $0.uuid.uuidString.lowercased() })
+          +            state?.knownStock[key] = Array(known)
+          +            try persist()
+          +        }
+               }
+               private func upload(_ rows: [[String: Any]], deleted: [String], type: String, api: MobileAPI,
+                                   epoch: String, serial: Int) async throws {
+          @@ -434,7 +487,7 @@
+                       }
+                   }
+                   if UserDefaults.standard.bool(forKey: "healthArchiveVision") {
+          -            try await reconcileVision(api: api, epoch: epoch, serial: serial)
+          +            try await syncVision(api: api, epoch: epoch, serial: serial)
+                   }
+                   if UserDefaults.standard.bool(forKey: "healthArchiveClinical") {
+                       try await syncDocuments(api: api, epoch: epoch, serial: serial)
+          @@ -445,25 +498,6 @@
+                       try await sendProjection(current, type: HKObjectType.activitySummaryType().identifier,
+                                                api: api, epoch: epoch, serial: serial)
+                   }
+          -        try persist()
+          -    }
+          -    private func reconcileVision(api: MobileAPI, epoch: String, serial: Int) async throws {
+          -        let type = HKObjectType.visionPrescriptionType()
+          -        let known = Set(state?.knownStock[type.identifier] ?? [])
+          -        guard !known.isEmpty else { return }
+          -        let visible: Set<String>? = await withCheckedContinuation { continuation in
+          -            let query = HKSampleQuery(sampleType: type, predicate: nil, limit: HKObjectQueryNoLimit, sortDescriptors: nil) {
+          -                _, samples, error in
+          -                continuation.resume(returning: error == nil ? Set((samples ?? []).map { $0.uuid.uuidString.lowercased() }) : nil)
+          -            }
+          -            store.execute(query)
+          -        }
+          -        guard let visible else { return }
+          -        try active(serial)
+          -        let removed = known.subtracting(visible)
+          -        guard !removed.isEmpty else { return }
+          -        try await upload([], deleted: Array(removed), type: type.identifier, api: api, epoch: epoch, serial: serial)
+          -        state?.knownStock[type.identifier] = Array(known.intersection(visible))
+                   try persist()
+               }
+               private func syncDocuments(api: MobileAPI, epoch: String, serial: Int) async throws {
+          --- a/Sources/App/HealthService.swift
+          +++ b/Sources/App/HealthService.swift
+          @@ -40,6 +40,9 @@
+               private var refreshTask: Task<Void, Never>?
+               private var observedChanges = 0
+               private var reviewingAccess = false
+          +    #if targetEnvironment(simulator)
+          +    private var capturedSimulatorRegistration = false
+          +    #endif
+               private(set) var completedHealthRead = false
+               var sharingChoice: Bool? {
+                   guard let id = Bundle.main.bundleIdentifier else { return nil }
+          @@ -169,8 +172,7 @@
+                       UserDefaults.standard.set(false, forKey: "healthBackground")
+                       return
+                   }
+          -        installObservers()
+          -        inventory.installObserver()
+          +        installHealthObservers()
+                   var firstError: Error?
+                   var registered = false
+                   for type in types.compactMap({ $0 as? HKSampleType }) {
+          @@ -184,7 +186,27 @@
+                   if let firstError { syncMessage = "部分健康指标等待后台权限：\(firstError.localizedDescription)" }
+               }
+               func restoreObserversOnLaunch() {
+          -        if UserDefaults.standard.bool(forKey: "healthBackground") { installObservers(); inventory.installObserver() }
+          +        if UserDefaults.standard.bool(forKey: "healthBackground") { installHealthObservers() }
+          +    }
+          +    private func installHealthObservers() {
+          +        guard HKHealthStore.isHealthDataAvailable() else { return }
+          +        installObservers()
+          +        let core = Set(types.compactMap { ($0 as? HKSampleType)?.identifier })
+          +        inventory.installObserver(excluding: core)
+          +        #if targetEnvironment(simulator)
+          +        if !capturedSimulatorRegistration && UserDefaults.standard.bool(forKey: "healthAutoSync") {
+          +            var evidence: [String: Any] = ["core": core.sorted(), "archive": inventory.observerIDs.sorted(),
+          +                                           "created_at": Date().timeIntervalSince1970]
+          +            if UserDefaults.standard.bool(forKey: "validateArchiveQueryConstructors") {
+          +                evidence["anchored"] = inventory.validateArchiveQueriesForSimulator()
+          +            }
+          +            let file = FileManager.default.temporaryDirectory.appendingPathComponent("loki-health-observers-ready.json")
+          +            if let data = try? JSONSerialization.data(withJSONObject: evidence, options: [.sortedKeys]) {
+          +                do { try data.write(to: file, options: .atomic); capturedSimulatorRegistration = true }
+          +                catch { /* The smoke test will report a missing marker. */ }
+          +            }
+          +        }
+          +        #endif
+               }
+               private func installObservers() {
+                   guard observers.isEmpty else { return }
+          @@ -200,7 +222,7 @@
+                               }
+                               await self.refresh(upload: false)
+                               await self.syncPending()
+          -                    self.inventory.schedule()
+          +                    self.inventory.markObserved(type.identifier)
+                               LocationService.shared.refreshWeatherFromHealthDelivery()
+                               completion() // HealthKit is acknowledged even when the phone has no network.
+                           }
+          --- a/Sources/App/LokiApp.swift
+          +++ b/Sources/App/LokiApp.swift
+          @@ -59,7 +59,10 @@
+                               Task {
+                                   await notifications.refresh()
+                                   if UserDefaults.standard.bool(forKey: "healthBackground") { try? await health.background(true) }
+          -                        if UserDefaults.standard.bool(forKey: "healthAutoSync") { await health.refresh() }
+          +                        if UserDefaults.standard.bool(forKey: "healthAutoSync") {
+          +                            health.inventory.requestCatchUp(foreground: true)
+          +                            await health.refresh()
+          +                        }
+                                   await health.syncPending()
+                                   if app.unlocked { await alarms.autoSyncCourses(api: app.api) }
+                               }
+          @@ -72,6 +75,7 @@
+                       .onReceive(NotificationCenter.default.publisher(for: UIApplication.protectedDataDidBecomeAvailableNotification)) { _ in
+                           app.restoreProtectedChat()
+                           if UserDefaults.standard.bool(forKey: "healthAutoSync") {
+          +                    health.inventory.requestCatchUp(foreground: true)
+                               Task { await health.refresh() }
+                           }
+                       }
+          LAUNCH_PATCH
+          shasum -a 256 -c - <<'VERIFIED'
+          f6ed49c930d4976409a3550fe6310b44aa86f10bef7ae73b19c14860785a23a2  Sources/App/NativeHealthInventory.swift
+          e3130a472b5db21bfac0bf80c891ae24a0290ee2ec619ad9470b6065c19fe118  Sources/App/HealthService.swift
+          d70d48d776ec8b83d82fa8f454fc742ef0026d7ce32646eb21447821c5a19811  Sources/App/LokiApp.swift
+          VERIFIED
+          python3 - <<'VERSION'
+          from pathlib import Path
+          p=Path('project.yml')
+          s=p.read_text()
+          assert '112301' in s and '112302' not in s
+          p.write_text(s.replace('112301','112302'))
+          VERSION
+      - name: Test sleep selection and overnight readings
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc -swift-version 5 Sources/App/SleepIntervals.swift Sources/App/SleepDetails.swift Tests/SleepWakeHealth/main.swift -o "$RUNNER_TEMP/test-sleep-wake"
+          "$RUNNER_TEMP/test-sleep-wake"
+      - name: Health archive payload identity and binary reconstruction
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc -swift-version 5 Sources/App/HealthArchivePayload.swift Tests/HealthArchivePayload/main.swift -o "$RUNNER_TEMP/health-archive-payload"
+          "$RUNNER_TEMP/health-archive-payload"
+      - name: Health archive scheduling and fairness
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc -swift-version 5 Sources/App/HealthArchiveSchedule.swift Tests/HealthArchiveSchedule/main.swift -o "$RUNNER_TEMP/health-archive-scheduling"
+          "$RUNNER_TEMP/health-archive-scheduling"
+      - name: Test app presence, typing and voice activity
+        working-directory: app-source
+        shell: bash
+        run: |
+          swiftc -swift-version 5 -parse-as-library Sources/App/CompanionInteraction.swift Tests/CompanionInteractionRegression/main.swift -o "$RUNNER_TEMP/test-interaction"
+          "$RUNNER_TEMP/test-interaction"
+      - name: Test message timestamps and legacy conversation order
+        shell: bash
+        working-directory: app-source
+        run: |
+          swiftc Sources/App/Models.swift Sources/App/ChatHistoryTiming.swift Tests/MessageTimes/main.swift -o "$RUNNER_TEMP/loki-message-times"
+          "$RUNNER_TEMP/loki-message-times"
+      - name: Test notification routing and inbox
+        shell: bash
+        working-directory: app-source
+        run: |
+          swiftc Sources/App/ChatNotificationInbox.swift Tests/NotificationRouting/main.swift -o "$RUNNER_TEMP/loki-notification-routing"
+          "$RUNNER_TEMP/loki-notification-routing"
+      - name: Test public reasoning and tool display
+        shell: bash
+        working-directory: app-source
+        run: |
+          awk '/^struct ChatItem:/ { exit } { print }' Sources/App/Models.swift > "$RUNNER_TEMP/display-tests.swift"
+          cat >> "$RUNNER_TEMP/display-tests.swift" <<'SWIFT'
+          let prefix = "Activity · Compare the two options."
+          let tool = "Used the music search tool."
+          let stages = "Activity · Received your message.\nWriting the reply."
+          precondition(TurnProgressContent(summary: prefix, activity: tool).summary == prefix)
+          precondition(TurnProgressContent(summary: prefix, activity: tool).activity == tool)
+          precondition(TurnProgressContent(summary: stages).isEmpty)
+          precondition(TurnProgressContent(summary: "Activity · " + tool, activity: tool).summary == nil)
+          precondition(TurnProgressContent(summary: "Activity · " + tool, activity: tool).activity == tool)
+          precondition(TurnProgressContent(summary: "Compare the options.").summary == "Compare the options.")
+          precondition(TurnProgressContent(activity: tool).summary == nil)
+          precondition(TurnProgressContent(activity: tool).activity == tool)
+          print("Public progress and tool display regressions passed")
+          SWIFT
+          swift "$RUNNER_TEMP/display-tests.swift"
+      - name: Verify calibrated pointer math
+        run: |
+          cat app-source/Sources/App/PhonePointerMath.swift app-source/review/tests/pointer-math-check.swift > /tmp/pointer-check.swift
+          swift /tmp/pointer-check.swift
+      - name: Generate project
+        working-directory: app-source
+        run: |
+          command -v xcodegen || brew install xcodegen
+          swift scripts/generate-app-icon.swift
+          xcodegen generate --spec project.yml
+          mkdir -p build
+      - name: Compile complete App for simulator
+        working-directory: app-source
+        run: |
+          xcodebuild -project Loki.xcodeproj -scheme Loki -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath build/Simulator CODE_SIGN_IDENTITY="-" build > build/simulator.log 2>&1 || { tail -100 build/simulator.log; exit 1; }
+      - name: Boot iPhone simulator and verify both cold launches
+        working-directory: app-source
+        shell: bash
+        run: |
+          python3 - <<'STARTUP_SMOKE'
+          import json
+          import os
+          import plistlib
+          import re
+          import subprocess
+          import sys
+          import time
+          from pathlib import Path
+          
+          def run(*args, timeout=120, check=True):
+              process = subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
+              if check and process.returncode:
+                  raise RuntimeError(f'{Path(args[0]).name} failed ({process.returncode}): {process.stdout[-900:]}')
+              return process
+          
+          def sim(*args, **kwargs):
+              return run('xcrun','simctl',*args,**kwargs).stdout.strip()
+          
+          def runtimes():
+              items = json.loads(sim('list','runtimes','-j'))['runtimes']
+              return sorted((r for r in items if r.get('isAvailable') and '.iOS-' in r['identifier']
+                             and int(r['version'].split('.')[0]) >= 26),
+                            key=lambda r: tuple(int(c) for c in r['version'].split('.')), reverse=True)
+          
+          available = runtimes()
+          if not available:
+              print('Installing the iOS simulator runtime matching the selected Xcode.', flush=True)
+              run('xcodebuild','-downloadPlatform','iOS',timeout=1250)
+              available = runtimes()
+          if not available:
+              raise RuntimeError('No iOS 26+ simulator runtime is installed')
+          runtime = available[0]
+          devices = json.loads(sim('list','devices','-j'))['devices'].get(runtime['identifier'],[])
+          iphones = [d for d in devices if d.get('isAvailable') and d['name'].startswith('iPhone')]
+          if iphones:
+              device = max(iphones, key=lambda d: ('Pro Max' in d['name'], tuple(map(int,re.findall(r'\d+',d['name']) or ['0'])), d['name']))
+              device_type = device['deviceTypeIdentifier']
+          else:
+              types = [t for t in runtime.get('supportedDeviceTypes',[]) if t['name'].startswith('iPhone')]
+              if not types: raise RuntimeError('Runtime has no supported iPhone device type')
+              model = max(types, key=lambda t: ('Pro Max' in t['name'],tuple(map(int,re.findall(r'\d+',t['name']) or ['0']))))
+              device_type = model['identifier']
+          udid = sim('create','Loki 112302 startup '+os.environ.get('GITHUB_RUN_ID','validation'),device_type,runtime['identifier'])
+          print('Simulator runtime',runtime['version'],flush=True)
+          sim('bootstatus',udid,'-b',timeout=360)
+          app = Path('build/Simulator/Build/Products/Debug-iphonesimulator/Loki.app').resolve()
+          info = plistlib.loads((app/'Info.plist').read_bytes())
+          bid, executable = info['CFBundleIdentifier'], info['CFBundleExecutable']
+          assert info['CFBundleVersion'] == '112302'
+          sim('install',udid,str(app))
+          data = Path(sim('get_app_container',udid,bid,'data')).resolve()
+          preferences = data/'Library/Preferences'/(bid+'.plist')
+          marker = data/'tmp/loki-health-observers-ready.json'
+          report = Path('build/startup-smoke.json')
+          evidence = dict(build=info['CFBundleVersion'],runtime=runtime['version'],checks=[])
+          def save():
+              report.write_text(json.dumps(evidence, indent=2))
+          def crash_reports(start):
+              bases = [Path.home()/'Library/Logs/DiagnosticReports',
+                       Path.home()/'Library/Developer/CoreSimulator/Devices'/udid/'data/Library/Logs/CrashReporter']
+              files=[]
+              for base in bases:
+                  if not base.is_dir(): continue
+                  for f in base.rglob(executable+'*'):
+                      if f.suffix in ('.ips','.crash') and f.stat().st_mtime >= start: files.append(f)
+              return files
+          def check(label, verify_marker=False):
+              started = time.time()
+              if marker.exists(): marker.unlink()
+              opts = {'env': {**os.environ, 'SIMCTL_CHILD_LOKI_HEALTH_STARTUP_SMOKE':'1'}}
+              launch = subprocess.run(['xcrun','simctl','launch',udid,bid],stdout=subprocess.PIPE,
+                                      stderr=subprocess.STDOUT,text=True,timeout=60,**opts)
+              if launch.returncode: raise RuntimeError('App launch rejected: '+launch.stdout[-650:])
+              parsed = re.search(re.escape(bid)+r':\s*(\d+)',launch.stdout)
+              if not parsed: raise RuntimeError('App launch did not report its PID')
+              pid = parsed.group(1)
+              for seconds in range(24):
+                  process=run('ps','-p',pid,'-o','state=','-o','comm=',check=False)
+                  line=process.stdout.strip()
+                  if process.returncode or not line or line.startswith('Z') or Path(line.split(None,1)[-1]).name!=executable:
+                      time.sleep(3)
+                      names=[p.name for p in crash_reports(started)]
+                      raise RuntimeError(f'{label}: app exited after {seconds}s; crash reports: {names}')
+                  time.sleep(1)
+              reports = crash_reports(started)
+              if reports: raise RuntimeError(f'{label}: simulator produced a crash report')
+              result = dict(scenario=label, same_pid_alive_seconds=24, new_app_crash_reports=0)
+              if verify_marker:
+                  assert marker.is_file(), 'Healthy PID did not finish the real observer registration path'
+                  mark = json.loads(marker.read_text())
+                  assert float(mark['created_at']) >= int(started) and float(mark['created_at']) < time.time()+3
+                  core, archive = mark['core'], mark['archive']
+                  assert len(core) == len(set(core)) == 6 and len(archive) == len(set(archive)) == 6
+                  assert not set(core).intersection(archive)
+                  assert not any('VisionPrescription' in k or 'MedicationDoseEvent' in k for k in core+archive)
+                  anchored = mark['anchored']
+                  assert len(set(anchored)) > 170 and len(anchored)==len(set(anchored))
+                  assert all('VisionPrescription' not in k for k in anchored)
+                  assert any('WorkoutTypeIdentifier' in k for k in anchored)
+                  assert any('MedicationDoseEvent' in k for k in anchored)
+                  result.update(confirmed_health_observers=len(core)+len(archive), verified_archive_constructors=len(anchored),
+                                persistent_health_auto_sync=True, persistent_health_background=True)
+              return result
+          try:
+              evidence['checks'].append(check('fresh install'))
+              save()
+              sim('terminate',udid,bid)
+              sim('shutdown',udid,timeout=150)
+              # Seed the persistent domain while cfprefsd is stopped, exactly as an upgrade retains these switches.
+              prefs=plistlib.loads(preferences.read_bytes()) if preferences.exists() else {}
+              prefs.update(healthAutoSync=True, healthBackground=True, validateArchiveQueryConstructors=True)
+              preferences.parent.mkdir(exist_ok=True,parents=True)
+              preferences.write_bytes(plistlib.dumps(prefs,fmt=plistlib.FMT_BINARY))
+              assert all(plistlib.loads(preferences.read_bytes()).get(k) is True for k in ('healthAutoSync','healthBackground','validateArchiveQueryConstructors'))
+              sim('bootstatus',udid,'-b',timeout=360)
+              evidence['checks'].append(check('upgrade with health syncing and background enabled', True))
+              save()
+              print(json.dumps(evidence),flush=True)
+          finally:
+              save()
+          STARTUP_SMOKE
+      - name: Compile real iPhone architecture
+        working-directory: app-source
+        run: |
+          xcodebuild -project Loki.xcodeproj -scheme Loki -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/Device CODE_SIGNING_ALLOWED=NO build > build/device.log 2>&1 || { tail -100 build/device.log; exit 1; }
+          python3 scripts/verify-device-build.py build/Device/Build/Products/Debug-iphoneos/Loki.app
+          ditto -c -k --sequesterRsrc --keepParent build/Device/Build/Products/Debug-iphoneos/Loki.app build/Loki-screen-control-unsigned.zip
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: loki-health-launch-112302
+          path: |
+            app-source/build/simulator.log
+            app-source/build/startup-smoke.json
+            app-source/build/device.log
+            app-source/build/Loki-screen-control-unsigned.zip
+          retention-days: 1
